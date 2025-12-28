@@ -451,6 +451,7 @@
             line-height: 1;
             transition: transform 0.1s;
             user-select: none;
+            touch-action: manipulation;
         }
 
         .popup-icon:hover {
@@ -912,12 +913,15 @@
             const items = document.querySelectorAll('.screenshot-item');
 
             items.forEach((item, index) => {
-                item.addEventListener('click', (e) => {
+                item.addEventListener('pointerdown', (e) => {
                     if (moveMode) {
                         // In move mode, clicking the grayed out item cancels
                         if (index === movingIndex) {
                             exitMoveMode();
                         }
+                        return;
+                    }
+                    if (e.target.closest('#screenshotPopup')) {
                         return;
                     }
 
@@ -947,33 +951,24 @@
             const deleteBtn = popup.querySelector('.popup-icon.delete');
             const moveBtn = popup.querySelector('.popup-icon.move');
 
-            deleteBtn.addEventListener('click', (e) => {
+            deleteBtn.addEventListener('pointerdown', (e) => {
                 e.stopPropagation();
                 deleteScreenshot(index);
             });
 
-            moveBtn.addEventListener('click', (e) => {
+            moveBtn.addEventListener('pointerdown', (e) => {
                 e.stopPropagation();
                 enterMoveMode(index);
             });
 
             document.body.classList.add('popup-mode');
 
-            document.addEventListener('click', popupBodyClick, true);
+            document.addEventListener('pointerdown', popupBodyClick, true);
         }
 
         function popupBodyClick(e) {
             if (e.target.closest('#screenshotPopup')) {
                 return;
-            }
-            const popup = document.getElementById('screenshotPopup');
-            if (popup) {
-                const rect = popup.getBoundingClientRect();
-                const x = e.clientX;
-                const y = e.clientY;
-                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-                    return;
-                }
             }
 
             const clickedItem = e.target.closest('.screenshot-item');
@@ -993,7 +988,7 @@
             }
 
             document.body.classList.remove('popup-mode');
-            document.removeEventListener('click', popupBodyClick, true);
+            document.removeEventListener('pointerdown', popupBodyClick, true);
         }
 
         function deleteScreenshot(index) {
@@ -1020,12 +1015,12 @@
                     const leftPlus = document.createElement('div');
                     leftPlus.className = 'plus-icon left active';
                     leftPlus.textContent = '+';
-                    leftPlus.onclick = () => moveScreenshotTo(index, 'left');
+                    leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
 
                     const rightPlus = document.createElement('div');
                     rightPlus.className = 'plus-icon right active';
                     rightPlus.textContent = '+';
-                    rightPlus.onclick = () => moveScreenshotTo(index, 'right');
+                    rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
 
                     item.appendChild(leftPlus);
                     item.appendChild(rightPlus);
@@ -1058,7 +1053,7 @@
             renderScreenshots();
         }
 
-        combineBtn.addEventListener('click', async () => {
+        combineBtn.addEventListener('pointerdown', async () => {
             if (uploadedImages.length < 2) return;
 
             processingOverlay.classList.add('active');
