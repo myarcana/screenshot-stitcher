@@ -379,93 +379,36 @@
             z-index: 20;
         }
 
-        .popup-menu {
+        .delete-btn-move-mode {
             position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 100;
-            display: none;
-        }
-
-        .popup-menu.active {
-            display: block;
-        }
-
-        /* Variable width border effect */
-        .popup-bubble-bg {
-            position: absolute;
-            background: #000;
-            border-radius: 30px;
-            width: 150px;
-            height: 90px;
-            top: 0;
-            left: 0;
-            transform: rotate(-2deg) scale(1.15);
-            box-shadow: 0 0 20px 8px rgba(255, 255, 255, 0.9);
-        }
-
-        .popup-bubble-bg::after {
-            content: '';
-            position: absolute;
-            top: 70px;
-            left: 50%;
-            transform: translateX(-50%) rotate(5deg);
-            width: 0;
-            height: 0;
-            border-left: 20px solid transparent;
-            border-right: 20px solid transparent;
-            border-top: 35px solid #000;
-        }
-
-        .popup-bubble-fg {
-            position: relative;
-            background: #fff;
-            border-radius: 25px;
-            width: 150px;
-            height: 90px;
-            padding: 20px;
+            top: 15px;
+            right: 15px;
+            width: 60px;
+            height: 60px;
+            background: #FF6B35;
+            border: 5px solid #000;
+            border-radius: 50%;
             display: flex;
             align-items: center;
-            justify-content: space-around;
-            gap: 30px;
-        }
-
-        .popup-bubble-fg::after {
-            content: '';
-            position: absolute;
-            top: 68px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 0;
-            height: 0;
-            border-left: 15px solid transparent;
-            border-right: 15px solid transparent;
-            border-top: 28px solid #fff;
-            z-index: 1;
-        }
-
-        .popup-icon {
-            cursor: pointer;
+            justify-content: center;
             font-size: 36px;
-            line-height: 1;
-            transition: transform 0.1s;
+            font-weight: 900;
+            color: #fff;
+            cursor: pointer;
+            z-index: 25;
+            box-shadow: 4px 4px 0px rgba(0, 0, 0, 0.3);
+            transition: transform 0.1s, background 0.1s;
             user-select: none;
             touch-action: manipulation;
         }
 
-        .popup-icon:hover {
-            transform: scale(1.2);
+        .delete-btn-move-mode:hover {
+            transform: scale(1.1);
+            background: #E63946;
         }
 
-        .popup-icon.delete {
-            color: #FF6B35;
-            font-weight: 900;
-        }
-
-        .popup-icon.move {
-            color: #000;
-            font-size: 32px;
+        .delete-btn-move-mode:active {
+            transform: scale(0.95);
         }
 
         .plus-icon {
@@ -513,10 +456,6 @@
             border-top: 6px solid #000;
             display: flex;
             gap: 12px;
-        }
-
-        .popup-mode .bottom-actions {
-            pointer-events: none;
         }
 
         .add-more-btn {
@@ -814,7 +753,6 @@
             resultFile: null,
             resultDataUrl: null
         };
-        let activePopupImage = null;
         let moveMode = false;
         let movingIndex = null;
 
@@ -921,84 +859,30 @@
                         }
                         return;
                     }
-                    if (e.target.closest('#screenshotPopup')) {
+                    if (e.target.closest('.delete-btn-move-mode')) {
                         return;
                     }
 
-                    showPopup(index, item);
+                    enterMoveMode(index);
                 });
             });
         }
 
-        function showPopup(index, item) {
-            activePopupImage = item;
-
-            const popup = document.createElement('div');
-            popup.className = 'popup-menu active';
-            popup.id = 'screenshotPopup';
-
-            popup.innerHTML = `
-                <div class="popup-bubble-bg"></div>
-                <div class="popup-bubble-fg">
-                    <div class="popup-icon delete">✕</div>
-                    <div class="popup-icon move">⇅</div>
-                </div>
-            `;
-
-            // CSS will center it
-            item.appendChild(popup);
-
-            const deleteBtn = popup.querySelector('.popup-icon.delete');
-            const moveBtn = popup.querySelector('.popup-icon.move');
-
-            deleteBtn.addEventListener('pointerdown', (e) => {
-                e.stopPropagation();
-                deleteScreenshot(index);
-            });
-
-            moveBtn.addEventListener('pointerdown', (e) => {
-                e.stopPropagation();
-                enterMoveMode(index);
-            });
-
-            document.body.classList.add('popup-mode');
-
-            document.addEventListener('pointerdown', popupBodyClick, true);
-        }
-
-        function popupBodyClick(e) {
-            if (e.target.closest('#screenshotPopup')) {
-                return;
-            }
-
-            const clickedItem = e.target.closest('.screenshot-item');
-
-            if (!clickedItem || clickedItem === activePopupImage) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-            hidePopup();
-        }
-
-        function hidePopup() {
-            activePopupImage = null;
-            const popup = document.getElementById('screenshotPopup');
-            if (popup) {
-                popup.remove();
-            }
-
-            document.body.classList.remove('popup-mode');
-            document.removeEventListener('pointerdown', popupBodyClick, true);
-        }
-
         function deleteScreenshot(index) {
             uploadedImages.splice(index, 1);
-            hidePopup();
+
+            if (moveMode) {
+                exitMoveMode();
+            }
+
             renderScreenshots();
+
+            if (uploadedImages.length === 0) {
+                showView(1);
+            }
         }
 
         function enterMoveMode(index) {
-            hidePopup();
             moveMode = true;
             movingIndex = index;
 
@@ -1011,6 +895,16 @@
             items.forEach((item, index) => {
                 if (index === movingIndex) {
                     item.classList.add('grayed-out');
+
+                    const deleteBtn = document.createElement('div');
+                    deleteBtn.className = 'delete-btn-move-mode';
+                    deleteBtn.innerHTML = '✕';
+                    deleteBtn.addEventListener('pointerdown', (e) => {
+                        e.stopPropagation();
+                        deleteScreenshot(movingIndex);
+                    });
+
+                    item.appendChild(deleteBtn);
                 } else {
                     const leftPlus = document.createElement('div');
                     leftPlus.className = 'plus-icon left active';
