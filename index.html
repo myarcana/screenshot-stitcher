@@ -1099,6 +1099,64 @@
             return blob;
         }
 
+        function createZeroMaskedCopies(imageA, imageB) {
+            // Return null if dimensions don't match
+            if (imageA.width !== imageB.width || imageA.height !== imageB.height) {
+                return null;
+            }
+
+            // Create temporary canvases
+            const canvasA = document.createElement('canvas');
+            const canvasB = document.createElement('canvas');
+            canvasA.width = imageA.width;
+            canvasA.height = imageA.height;
+            canvasB.width = imageB.width;
+            canvasB.height = imageB.height;
+
+            const ctxA = canvasA.getContext('2d');
+            const ctxB = canvasB.getContext('2d');
+
+            // Draw original images
+            ctxA.drawImage(imageA, 0, 0);
+            ctxB.drawImage(imageB, 0, 0);
+
+            // Get pixel data
+            const imageDataA = ctxA.getImageData(0, 0, canvasA.width, canvasA.height);
+            const imageDataB = ctxB.getImageData(0, 0, canvasB.width, canvasB.height);
+            const dataA = imageDataA.data;
+            const dataB = imageDataB.data;
+
+            // Loop through pixels and zero out matching ones
+            // Using flat array index (4 bytes per pixel: RGBA)
+            for (let y = 0; y < canvasA.height; y++) {
+                for (let x = 0; x < canvasA.width; x++) {
+                    const idx = (y * canvasA.width + x) * 4;
+
+                    // Compare RGB values
+                    if (dataA[idx] === dataB[idx] &&           // R
+                        dataA[idx + 1] === dataB[idx + 1] &&   // G
+                        dataA[idx + 2] === dataB[idx + 2]) {   // B
+
+                        // Zero out RGB in both images
+                        dataA[idx] = 0;
+                        dataA[idx + 1] = 0;
+                        dataA[idx + 2] = 0;
+
+                        dataB[idx] = 0;
+                        dataB[idx + 1] = 0;
+                        dataB[idx + 2] = 0;
+                        // Alpha (idx + 3) remains unchanged
+                    }
+                }
+            }
+
+            // Put modified data back
+            ctxA.putImageData(imageDataA, 0, 0);
+            ctxB.putImageData(imageDataB, 0, 0);
+
+            return { canvasA, canvasB };
+        }
+
         function computeRowSums(image) {
             const canvas = document.createElement('canvas');
             canvas.width = image.width;
@@ -1201,8 +1259,25 @@
             for (let i = 1; i < images.length; i++) {
                 const nextImage = images[i].img;
 
-                const rowSumsA = computeRowSums(currentCanvas);
-                const rowSumsB = computeRowSums(nextImage);
+                // Check if preprocessing should be applied
+                let imageAForFingerprint = currentCanvas;
+                let imageBForFingerprint = nextImage;
+
+                // Apply preprocessing only if dimensions match exactly
+                if (currentCanvas.width === nextImage.width &&
+                    currentCanvas.height === nextImage.height) {
+
+                    const maskedCopies = createZeroMaskedCopies(currentCanvas, nextImage);
+
+                    if (maskedCopies) {
+                        imageAForFingerprint = maskedCopies.canvasA;
+                        imageBForFingerprint = maskedCopies.canvasB;
+                    }
+                }
+
+                // Compute row sums using preprocessed images (or originals if no preprocessing)
+                const rowSumsA = computeRowSums(imageAForFingerprint);
+                const rowSumsB = computeRowSums(imageBForFingerprint);
 
                 const candidates = findLongestCommonSubstring(rowSumsA, rowSumsB);
 
