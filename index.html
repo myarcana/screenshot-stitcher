@@ -853,10 +853,6 @@
             items.forEach((item, index) => {
                 item.addEventListener('pointerdown', (e) => {
                     if (moveMode) {
-                        // In move mode, clicking the grayed out item cancels
-                        if (index === movingIndex) {
-                            exitMoveMode();
-                        }
                         return;
                     }
                     if (e.target.closest('.delete-btn-move-mode')) {
@@ -882,11 +878,24 @@
             }
         }
 
+        function handleMoveModeClick(e) {
+            if (e.target.closest('.delete-btn-move-mode') ||
+                e.target.closest('.plus-icon')) {
+                return;
+            }
+
+            exitMoveMode();
+        }
+
         function enterMoveMode(index) {
             moveMode = true;
             movingIndex = index;
 
             renderMoveMode();
+
+            setTimeout(() => {
+                document.addEventListener('pointerdown', handleMoveModeClick, true);
+            }, 0);
         }
 
         function renderMoveMode() {
@@ -944,6 +953,9 @@
         function exitMoveMode() {
             moveMode = false;
             movingIndex = null;
+
+            document.removeEventListener('pointerdown', handleMoveModeClick, true);
+
             renderScreenshots();
         }
 
