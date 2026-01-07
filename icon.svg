@@ -1,0 +1,68 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dotted yellow background -->
+  <defs>
+    <pattern id="dots" x="0" y="0" width="16" height="16" patternUnits="userSpaceOnUse">
+      <circle cx="8" cy="8" r="2.5" fill="rgba(0,0,0,0.12)"/>
+    </pattern>
+  </defs>
+
+  <!-- Background rectangle with dots -->
+  <rect width="512" height="512" fill="#FFD700"/>
+  <rect width="512" height="512" fill="url(#dots)"/>
+
+  <!-- Thick wonky black border -->
+  <path d="M 15 8 L 497 12 L 508 16 L 504 496 L 495 504 L 12 501 L 8 495 L 10 15 Z"
+        fill="none"
+        stroke="#000"
+        stroke-width="16"
+        stroke-linejoin="round"/>
+
+  <!-- Inner illustration area background -->
+  <rect x="80" y="80" width="352" height="352" fill="#F4E4C1" rx="8"/>
+
+  <!-- Top screenshot (offset left, rotated slightly) -->
+  <g transform="translate(140, 120) rotate(-8)">
+    <rect x="0" y="0" width="120" height="160" fill="#fff" stroke="#000" stroke-width="8" rx="4"/>
+    <!-- Screen content lines -->
+    <rect x="15" y="15" width="90" height="12" fill="#4ECDC4" rx="2"/>
+    <rect x="15" y="35" width="70" height="8" fill="#E8E8E8" rx="2"/>
+    <rect x="15" y="50" width="85" height="8" fill="#E8E8E8" rx="2"/>
+    <rect x="15" y="65" width="60" height="8" fill="#E8E8E8" rx="2"/>
+  </g>
+
+  <!-- Bottom screenshot (offset right, rotated slightly) -->
+  <g transform="translate(252, 232) rotate(8)">
+    <rect x="0" y="0" width="120" height="160" fill="#fff" stroke="#000" stroke-width="8" rx="4"/>
+    <!-- Screen content lines -->
+    <rect x="15" y="15" width="75" height="8" fill="#E8E8E8" rx="2"/>
+    <rect x="15" y="30" width="90" height="8" fill="#E8E8E8" rx="2"/>
+    <rect x="15" y="45" width="65" height="8" fill="#E8E8E8" rx="2"/>
+    <rect x="15" y="65" width="90" height="12" fill="#FF6B35" rx="2"/>
+  </g>
+
+  <!-- Stitch/zipper in the middle connecting them -->
+  <g transform="translate(256, 256)">
+    <!-- Stitching line -->
+    <line x1="-50" y1="-40" x2="50" y2="40" stroke="#000" stroke-width="10" stroke-linecap="round"/>
+
+    <!-- Stitch marks (diagonal dashes) -->
+    <line x1="-45" y1="-35" x2="-40" y2="-30" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="-30" y1="-23" x2="-25" y2="-18" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="-15" y1="-11" x2="-10" y2="-6" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="0" y1="1" x2="5" y2="6" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="15" y1="13" x2="20" y2="18" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="30" y1="25" x2="35" y2="30" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+    <line x1="45" y1="37" x2="50" y2="42" stroke="#FFE66D" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <!-- Comic-style action burst -->
+  <g transform="translate(180, 240)">
+    <circle cx="0" cy="0" r="35" fill="#FFE66D" stroke="#000" stroke-width="6"/>
+    <text x="0" y="8"
+          font-family="Impact, Arial Black, sans-serif"
+          font-size="32"
+          font-weight="900"
+          fill="#000"
+          text-anchor="middle">+</text>
+  </g>
+</svg>

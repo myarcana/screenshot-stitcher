@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="translucent-black">
-    <meta name="apple-mobile-web-app-title" content="My App">
+    <meta name="apple-mobile-web-app-title" content="Screenshot Stitcher">
+    <link rel="apple-touch-icon" href="icon-180.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="icon-152.png">
+    <link rel="apple-touch-icon" sizes="167x167" href="icon-167.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
     <title>Screenshot Stitcher</title>
     <style>
         @keyframes spin {
@@ -413,15 +417,15 @@
 
         .plus-icon {
             position: absolute;
-            width: 40px;
-            height: 40px;
+            width: 50px;
+            height: 50px;
             background: #FFE66D;
-            border: 4px solid #000;
+            border: 5px solid #000;
             border-radius: 50%;
             display: none;
             align-items: center;
             justify-content: center;
-            font-size: 28px;
+            font-size: 34px;
             font-weight: 900;
             cursor: pointer;
             z-index: 50;
@@ -884,6 +888,11 @@
                 return;
             }
 
+            // Stop propagation when clicking on grayed-out item to prevent re-entering move mode
+            if (e.target.closest('.screenshot-item.grayed-out')) {
+                e.stopPropagation();
+            }
+
             exitMoveMode();
         }
 
@@ -915,18 +924,23 @@
 
                     item.appendChild(deleteBtn);
                 } else {
-                    const leftPlus = document.createElement('div');
-                    leftPlus.className = 'plus-icon left active';
-                    leftPlus.textContent = '+';
-                    leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
+                    // Don't show left plus on item right after moving item (would be no-op)
+                    if (index !== movingIndex + 1) {
+                        const leftPlus = document.createElement('div');
+                        leftPlus.className = 'plus-icon left active';
+                        leftPlus.textContent = '+';
+                        leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
+                        item.appendChild(leftPlus);
+                    }
 
-                    const rightPlus = document.createElement('div');
-                    rightPlus.className = 'plus-icon right active';
-                    rightPlus.textContent = '+';
-                    rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
-
-                    item.appendChild(leftPlus);
-                    item.appendChild(rightPlus);
+                    // Don't show right plus on item right before moving item (would be no-op)
+                    if (index !== movingIndex - 1) {
+                        const rightPlus = document.createElement('div');
+                        rightPlus.className = 'plus-icon right active';
+                        rightPlus.textContent = '+';
+                        rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
+                        item.appendChild(rightPlus);
+                    }
                 }
             });
         }
