@@ -386,8 +386,6 @@
 
         .delete-btn-move-mode {
             position: absolute;
-            top: 15px;
-            right: 15px;
             width: 60px;
             height: 60px;
             background: #FF6B35;
@@ -453,7 +451,6 @@
 
         .plus-icon.merged {
             transform: translate(-50%, -50%);
-            top: auto;
         }
 
         .bottom-actions {
@@ -915,26 +912,28 @@
 
         function renderMoveMode() {
             const items = document.querySelectorAll('.screenshot-item');
-            const trayRect = screenshotTray.getBoundingClientRect();
 
             // Track which buttons are handled via merging
             const handledLeftPlus = new Set();
             const handledRightPlus = new Set();
 
-            // First pass: add grayed-out class and delete button to moving item
+            // First pass: add grayed-out class to moving item and position delete button in tray
             items.forEach((item, index) => {
                 if (index === movingIndex) {
                     item.classList.add('grayed-out');
 
+                    // Position delete button in tray (not as child of grayed-out item) so it's not transparent
                     const deleteBtn = document.createElement('div');
                     deleteBtn.className = 'delete-btn-move-mode';
                     deleteBtn.innerHTML = '✕';
+                    deleteBtn.style.left = (item.offsetLeft + item.offsetWidth - 75) + 'px';
+                    deleteBtn.style.top = (item.offsetTop + 15) + 'px';
                     deleteBtn.addEventListener('pointerdown', (e) => {
                         e.stopPropagation();
                         deleteScreenshot(movingIndex);
                     });
 
-                    item.appendChild(deleteBtn);
+                    screenshotTray.appendChild(deleteBtn);
                 }
             });
 
@@ -948,47 +947,52 @@
 
             // Check for mergeable buttons between visually adjacent items
             for (let i = 0; i < nonMovingItems.length - 1; i++) {
-                const { item: itemA, index: indexA } = nonMovingItems[i];
-                const { item: itemB, index: indexB } = nonMovingItems[i + 1];
+                const { item: leftItem, index: leftIndex } = nonMovingItems[i];
+                const { item: rightItem, index: rightIndex } = nonMovingItems[i + 1];
 
                 // Check if these items are actually adjacent (accounting for the moving item gap)
-                const areAdjacentInArray = (indexB === indexA + 1) ||
-                                           (indexB === indexA + 2 && movingIndex === indexA + 1);
+                const areAdjacentInArray = (rightIndex === leftIndex + 1) ||
+                                           (rightIndex === leftIndex + 2 && movingIndex === leftIndex + 1);
 
                 if (!areAdjacentInArray) continue;
 
                 // Check if both plus buttons would exist
-                const hasRightPlus = (indexA !== movingIndex - 1);
-                const hasLeftPlus = (indexB !== movingIndex + 1);
+                const hasRightPlus = (leftIndex !== movingIndex - 1);
+                const hasLeftPlus = (rightIndex !== movingIndex + 1);
 
                 if (!hasRightPlus || !hasLeftPlus) continue;
 
                 // Check if they're on the same row (no line break between them)
-                const rectA = itemA.getBoundingClientRect();
-                const rectB = itemB.getBoundingClientRect();
+                // If rightItem wrapped to a new line, its offsetLeft would be <= leftItem's offsetLeft
+                const sameRow = rightItem.offsetLeft > leftItem.offsetLeft;
 
-                const centerYA = rectA.top + rectA.height / 2;
-                const centerYB = rectB.top + rectB.height / 2;
-                const maxHeight = Math.max(rectA.height, rectB.height);
-                const sameRow = Math.abs(centerYA - centerYB) < maxHeight;
+                if (!sameRow) continue;
 
-                if (sameRow) {
-                    handledRightPlus.add(indexA);
-                    handledLeftPlus.add(indexB);
+                // Calculate where the original plus buttons would be positioned
+                // Left button: the right-side plus of leftItem
+                const leftButtonX = leftItem.offsetLeft + leftItem.offsetWidth - 5;
+                const leftButtonY = leftItem.offsetTop + leftItem.offsetHeight / 2;
+                // Right button: the left-side plus of rightItem
+                const rightButtonX = rightItem.offsetLeft + 5;
+                const rightButtonY = rightItem.offsetTop + rightItem.offsetHeight / 2;
 
-                    // Create merged button positioned in the tray
-                    const avgX = (rectA.right + rectB.left) / 2 - trayRect.left;
-                    const lowestY = Math.max(centerYA, centerYB) - trayRect.top;
+                handledRightPlus.add(leftIndex);
+                handledLeftPlus.add(rightIndex);
 
-                    const mergedPlus = document.createElement('div');
-                    mergedPlus.className = 'plus-icon merged active';
-                    mergedPlus.textContent = '+';
-                    mergedPlus.style.left = avgX + 'px';
-                    mergedPlus.style.top = lowestY + 'px';
-                    mergedPlus.addEventListener('pointerdown', () => moveScreenshotTo(indexB, 'left'));
+                // Merged button position: average X, weighted toward lower button for Y
+                const higherY = Math.min(leftButtonY, rightButtonY);
+                const lowerY = Math.max(leftButtonY, rightButtonY);
+                const mergedX = (leftButtonX + rightButtonX) / 2;
+                const mergedY = lowerY - (lowerY - higherY) / 4;
 
-                    screenshotTray.appendChild(mergedPlus);
-                }
+                const mergedPlus = document.createElement('div');
+                mergedPlus.className = 'plus-icon merged active';
+                mergedPlus.textContent = '+';
+                mergedPlus.style.left = mergedX + 'px';
+                mergedPlus.style.top = mergedY + 'px';
+                mergedPlus.addEventListener('pointerdown', () => moveScreenshotTo(rightIndex, 'left'));
+
+                screenshotTray.appendChild(mergedPlus);
             }
 
             // Second pass: add remaining plus buttons to items
