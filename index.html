@@ -316,6 +316,7 @@
             padding: 20px;
             align-content: flex-start;
             align-items: flex-start;
+            position: relative;
         }
 
         .screenshot-item {
@@ -448,6 +449,11 @@
 
         .plus-icon.right {
             right: -20px;
+        }
+
+        .plus-icon.merged {
+            transform: translate(-50%, -50%);
+            top: auto;
         }
 
         .bottom-actions {
@@ -909,7 +915,13 @@
 
         function renderMoveMode() {
             const items = document.querySelectorAll('.screenshot-item');
+            const trayRect = screenshotTray.getBoundingClientRect();
 
+            // Track which buttons are handled via merging
+            const handledLeftPlus = new Set();
+            const handledRightPlus = new Set();
+
+            // First pass: add grayed-out class and delete button to moving item
             items.forEach((item, index) => {
                 if (index === movingIndex) {
                     item.classList.add('grayed-out');
@@ -923,24 +935,82 @@
                     });
 
                     item.appendChild(deleteBtn);
-                } else {
-                    // Don't show left plus on item right after moving item (would be no-op)
-                    if (index !== movingIndex + 1) {
-                        const leftPlus = document.createElement('div');
-                        leftPlus.className = 'plus-icon left active';
-                        leftPlus.textContent = '+';
-                        leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
-                        item.appendChild(leftPlus);
-                    }
+                }
+            });
 
-                    // Don't show right plus on item right before moving item (would be no-op)
-                    if (index !== movingIndex - 1) {
-                        const rightPlus = document.createElement('div');
-                        rightPlus.className = 'plus-icon right active';
-                        rightPlus.textContent = '+';
-                        rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
-                        item.appendChild(rightPlus);
-                    }
+            // Build list of non-moving items with their indices
+            const nonMovingItems = [];
+            items.forEach((item, index) => {
+                if (index !== movingIndex) {
+                    nonMovingItems.push({ item, index });
+                }
+            });
+
+            // Check for mergeable buttons between visually adjacent items
+            for (let i = 0; i < nonMovingItems.length - 1; i++) {
+                const { item: itemA, index: indexA } = nonMovingItems[i];
+                const { item: itemB, index: indexB } = nonMovingItems[i + 1];
+
+                // Check if these items are actually adjacent (accounting for the moving item gap)
+                const areAdjacentInArray = (indexB === indexA + 1) ||
+                                           (indexB === indexA + 2 && movingIndex === indexA + 1);
+
+                if (!areAdjacentInArray) continue;
+
+                // Check if both plus buttons would exist
+                const hasRightPlus = (indexA !== movingIndex - 1);
+                const hasLeftPlus = (indexB !== movingIndex + 1);
+
+                if (!hasRightPlus || !hasLeftPlus) continue;
+
+                // Check if they're on the same row (no line break between them)
+                const rectA = itemA.getBoundingClientRect();
+                const rectB = itemB.getBoundingClientRect();
+
+                const centerYA = rectA.top + rectA.height / 2;
+                const centerYB = rectB.top + rectB.height / 2;
+                const maxHeight = Math.max(rectA.height, rectB.height);
+                const sameRow = Math.abs(centerYA - centerYB) < maxHeight;
+
+                if (sameRow) {
+                    handledRightPlus.add(indexA);
+                    handledLeftPlus.add(indexB);
+
+                    // Create merged button positioned in the tray
+                    const avgX = (rectA.right + rectB.left) / 2 - trayRect.left;
+                    const lowestY = Math.max(centerYA, centerYB) - trayRect.top;
+
+                    const mergedPlus = document.createElement('div');
+                    mergedPlus.className = 'plus-icon merged active';
+                    mergedPlus.textContent = '+';
+                    mergedPlus.style.left = avgX + 'px';
+                    mergedPlus.style.top = lowestY + 'px';
+                    mergedPlus.addEventListener('pointerdown', () => moveScreenshotTo(indexB, 'left'));
+
+                    screenshotTray.appendChild(mergedPlus);
+                }
+            }
+
+            // Second pass: add remaining plus buttons to items
+            items.forEach((item, index) => {
+                if (index === movingIndex) return;
+
+                // Left plus (unless handled by merge or would be no-op)
+                if (index !== movingIndex + 1 && !handledLeftPlus.has(index)) {
+                    const leftPlus = document.createElement('div');
+                    leftPlus.className = 'plus-icon left active';
+                    leftPlus.textContent = '+';
+                    leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
+                    item.appendChild(leftPlus);
+                }
+
+                // Right plus (unless handled by merge or would be no-op)
+                if (index !== movingIndex - 1 && !handledRightPlus.has(index)) {
+                    const rightPlus = document.createElement('div');
+                    rightPlus.className = 'plus-icon right active';
+                    rightPlus.textContent = '+';
+                    rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
+                    item.appendChild(rightPlus);
                 }
             });
         }
