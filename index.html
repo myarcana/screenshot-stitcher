@@ -990,7 +990,10 @@
                 mergedPlus.textContent = '+';
                 mergedPlus.style.left = mergedX + 'px';
                 mergedPlus.style.top = mergedY + 'px';
-                mergedPlus.addEventListener('pointerdown', () => moveScreenshotTo(rightIndex, 'left'));
+                mergedPlus.addEventListener('pointerdown', (e) => {
+                    e.stopPropagation();
+                    moveScreenshotTo(rightIndex, 'left');
+                });
 
                 screenshotTray.appendChild(mergedPlus);
             }
@@ -1004,7 +1007,10 @@
                     const leftPlus = document.createElement('div');
                     leftPlus.className = 'plus-icon left active';
                     leftPlus.textContent = '+';
-                    leftPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'left'));
+                    leftPlus.addEventListener('pointerdown', (e) => {
+                        e.stopPropagation();
+                        moveScreenshotTo(index, 'left');
+                    });
                     item.appendChild(leftPlus);
                 }
 
@@ -1013,7 +1019,10 @@
                     const rightPlus = document.createElement('div');
                     rightPlus.className = 'plus-icon right active';
                     rightPlus.textContent = '+';
-                    rightPlus.addEventListener('pointerdown', () => moveScreenshotTo(index, 'right'));
+                    rightPlus.addEventListener('pointerdown', (e) => {
+                        e.stopPropagation();
+                        moveScreenshotTo(index, 'right');
+                    });
                     item.appendChild(rightPlus);
                 }
             });
