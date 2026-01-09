@@ -762,12 +762,13 @@
 
         // Find longest common substring of hashes between two arrays
         // Returns: { startA, startB, length } or null if no match
-        function findLongestCommonSubstring(hashesA, hashesB, minYDiff = 0, avgLineHeight = 0) {
+        function findLongestCommonSubstring(hashesA, hashesB, minYDiff = 0) {
             if (hashesA.length === 0 || hashesB.length === 0) return null;
 
             let best = null;
 
             // Build a map of hash -> indices in B for faster lookup
+            // Since hashesB is sorted by y, indices will be in y-ascending order
             const hashIndicesB = new Map();
             for (let j = 0; j < hashesB.length; j++) {
                 const h = hashesB[j].hash;
@@ -777,19 +778,37 @@
                 hashIndicesB.get(h).push(j);
             }
 
+            // Binary search to find last index where hashesB[indices[k]].y <= targetY
+            // Returns the index after the last valid one (for use as exclusive upper bound)
+            function findLastValidIndex(indices, maxY) {
+                let lo = 0, hi = indices.length;
+                while (lo < hi) {
+                    const mid = (lo + hi) >> 1;
+                    if (hashesB[indices[mid]].y <= maxY) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                return lo; // This is the exclusive upper bound
+            }
+
             // For each position in A, try to find matching sequences in B
             for (let i = 0; i < hashesA.length; i++) {
                 const hash = hashesA[i].hash;
-                const matchingIndices = hashIndicesB.get(hash) || [];
+                const matchingIndices = hashIndicesB.get(hash);
+                if (!matchingIndices) continue;
 
-                for (const j of matchingIndices) {
-                    // Check if y-difference constraint is satisfied
-                    if (minYDiff > 0) {
-                        const yDiffRatio = Math.abs(hashesA[i].y - hashesB[j].y) / avgLineHeight;
-                        if (yDiffRatio < 0.5) {
-                            continue; // Y positions too similar, skip
-                        }
-                    }
+                // Constraint: B's y must be <= A's y - minYDiff
+                // (overlap in B must be higher/smaller Y than in A)
+                const maxAllowedY = hashesA[i].y - minYDiff;
+
+                // Binary search to find exclusive upper bound of valid indices
+                const endIdx = findLastValidIndex(matchingIndices, maxAllowedY);
+
+                // Only check indices with y position <= maxAllowedY
+                for (let k = 0; k < endIdx; k++) {
+                    const j = matchingIndices[k];
 
                     // Extend the match as far as possible
                     let len = 1;
@@ -903,11 +922,11 @@
                 }
 
                 // Find longest common substring with y-diff constraint
+                // B's y must be <= A's y - minYDiff (overlap in B must be higher than in A)
                 const match = findLongestCommonSubstring(
                     ocrAbove.lines,
                     ocrBelow.lines,
-                    avgLineHeight * 0.5, // Min y-diff is 50% of line height
-                    avgLineHeight
+                    avgLineHeight * 0.5 // Min y-diff is 50% of line height
                 );
 
                 if (match && match.length > 0) {
