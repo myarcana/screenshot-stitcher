@@ -851,6 +851,195 @@
             };
         }
 
+        // Find ALL horizontal edges in a vertical region of an image
+        // Uses multi-channel Sobel gradient detection with edge healing
+        // Returns array of { y, length, startX } for all edges found
+        function findAllHorizontalEdges(imageData, yStart, yEnd) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            const regionHeight = yEnd - yStart;
+            canvas.width = imageData.width;
+            canvas.height = regionHeight;
+
+            // Draw the region to analyze
+            ctx.drawImage(
+                imageData.img,
+                0, yStart,
+                imageData.width, regionHeight,
+                0, 0,
+                imageData.width, regionHeight
+            );
+
+            const pixelData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = pixelData.data;
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // Helper to get pixel value at (x, y) for channel c (0=R, 1=G, 2=B)
+            function getPixel(x, y, c) {
+                if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+                return data[(y * width + x) * 4 + c];
+            }
+
+            // Compute vertical Sobel gradient for each pixel, taking max across RGB channels
+            // Sobel Gy kernel: [[-1, -2, -1], [0, 0, 0], [1, 2, 1]]
+            const gradients = new Float32Array(width * height);
+
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 0; x < width; x++) {
+                    let maxGradient = 0;
+
+                    // Compute gradient for each channel and take max
+                    for (let c = 0; c < 3; c++) {
+                        // Sobel Gy - detects horizontal edges
+                        const gy = (
+                            -1 * getPixel(x - 1, y - 1, c) +
+                            -2 * getPixel(x, y - 1, c) +
+                            -1 * getPixel(x + 1, y - 1, c) +
+                             1 * getPixel(x - 1, y + 1, c) +
+                             2 * getPixel(x, y + 1, c) +
+                             1 * getPixel(x + 1, y + 1, c)
+                        );
+
+                        const gradMag = Math.abs(gy);
+                        if (gradMag > maxGradient) {
+                            maxGradient = gradMag;
+                        }
+                    }
+
+                    gradients[y * width + x] = maxGradient;
+                }
+            }
+
+            // Threshold for edge detection - Sobel amplifies by ~4x,
+            // so 20 detects changes of ~5 in pixel values per channel
+            const edgeThreshold = 20;
+
+            const allEdges = [];
+
+            for (let y = 1; y < height - 1; y++) {
+                // Find all edge segments in this row
+                const segments = [];
+                let currentStart = -1;
+
+                for (let x = 0; x < width; x++) {
+                    const grad = gradients[y * width + x];
+                    if (grad >= edgeThreshold) {
+                        if (currentStart === -1) {
+                            currentStart = x;
+                        }
+                    } else {
+                        if (currentStart !== -1) {
+                            segments.push({ startX: currentStart, endX: x - 1 });
+                            currentStart = -1;
+                        }
+                    }
+                }
+                // Check final segment
+                if (currentStart !== -1) {
+                    segments.push({ startX: currentStart, endX: width - 1 });
+                }
+
+                if (segments.length === 0) continue;
+
+                // Calculate total edge pixel coverage in this row
+                let totalEdgePixels = 0;
+                for (const seg of segments) {
+                    totalEdgePixels += seg.endX - seg.startX + 1;
+                }
+                const edgeCoverage = totalEdgePixels / width;
+
+                // Only heal (merge) edges if at least 30% of row has edge pixels
+                if (edgeCoverage >= 0.3) {
+                    // Merge all segments into one spanning edge
+                    const startX = segments[0].startX;
+                    const endX = segments[segments.length - 1].endX;
+                    const length = endX - startX + 1;
+
+                    if (length >= width * 0.1) {
+                        allEdges.push({
+                            y: yStart + y,
+                            length: length,
+                            startX: startX
+                        });
+                    }
+                } else {
+                    // No healing - use longest individual segment
+                    let longestSeg = segments[0];
+                    for (const seg of segments) {
+                        if (seg.endX - seg.startX > longestSeg.endX - longestSeg.startX) {
+                            longestSeg = seg;
+                        }
+                    }
+                    const length = longestSeg.endX - longestSeg.startX + 1;
+
+                    if (length >= width * 0.1) {
+                        allEdges.push({
+                            y: yStart + y,
+                            length: length,
+                            startX: longestSeg.startX
+                        });
+                    }
+                }
+            }
+
+            return allEdges;
+        }
+
+        // Find the single longest horizontal edge in a region
+        function findLongestHorizontalEdge(imageData, yStart, yEnd) {
+            const allEdges = findAllHorizontalEdges(imageData, yStart, yEnd);
+            if (allEdges.length === 0) return null;
+            return allEdges.reduce((best, edge) =>
+                (!best || edge.length > best.length) ? edge : best, null);
+        }
+
+        // Configurable threshold for edge width (percentage of image width)
+        const EDGE_WIDTH_THRESHOLD = 0.75;
+
+        // Find horizontal edge for cropping when no OCR match is found
+        // For upper image: find the LOWEST (largest Y) qualifying edge in bottom 25%
+        // For lower image: find the HIGHEST (smallest Y) qualifying edge in top 25%
+        function findEdgeCropPoints(imageAbove, imageBelow, widthThreshold = EDGE_WIDTH_THRESHOLD) {
+            const result = {
+                cropAboveY: null,
+                cropBelowY: null
+            };
+
+            // Search bottom 25% of top image - find LOWEST qualifying edge
+            const aboveSearchStart = Math.floor(imageAbove.height * 0.75);
+            const aboveSearchEnd = imageAbove.height;
+            const edgesAbove = findAllHorizontalEdges(imageAbove, aboveSearchStart, aboveSearchEnd);
+
+            // Filter to qualifying edges and find the one with largest Y (lowest on screen)
+            const qualifyingAbove = edgesAbove.filter(e => e.length >= imageAbove.width * widthThreshold);
+            if (qualifyingAbove.length > 0) {
+                const lowestEdge = qualifyingAbove.reduce((best, edge) =>
+                    edge.y > best.y ? edge : best);
+                // Crop to TOP of edge (exclusive - don't include edge pixels)
+                // Sobel edge at y spans y-1 to y+1, so crop to y-1
+                result.cropAboveY = lowestEdge.y - 1;
+            }
+
+            // Search top 25% of bottom image - find HIGHEST qualifying edge
+            const belowSearchStart = 0;
+            const belowSearchEnd = Math.floor(imageBelow.height * 0.25);
+            const edgesBelow = findAllHorizontalEdges(imageBelow, belowSearchStart, belowSearchEnd);
+
+            // Filter to qualifying edges and find the one with smallest Y (highest on screen)
+            const qualifyingBelow = edgesBelow.filter(e => e.length >= imageBelow.width * widthThreshold);
+            if (qualifyingBelow.length > 0) {
+                const highestEdge = qualifyingBelow.reduce((best, edge) =>
+                    edge.y < best.y ? edge : best);
+                // Crop from BOTTOM of edge (exclusive - don't include edge pixels)
+                // Sobel edge at y spans y-1 to y+1, so crop from y+2
+                result.cropBelowY = highestEdge.y + 2;
+            }
+
+            return result;
+        }
+
         // Stitch multiple cropped images vertically
         function stitchImages(croppedImages) {
             const canvas = document.createElement('canvas');
@@ -949,20 +1138,33 @@
                         croppedParts.push(cropped);
                     }
                 } else {
-                    // No match found - include entire image above
-                    croppedParts.push({
-                        dataUrl: imageAbove.src,
-                        width: imageAbove.width,
-                        height: imageAbove.height
-                    });
+                    // No match found - try horizontal edge detection as fallback
+                    const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
 
-                    // For the last pair, also add entire image below
-                    if (i === uploadedImages.length - 2) {
+                    // Crop image above: use edge if found, otherwise full image
+                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > 0) {
+                        const cropped = cropImage(imageAbove, 0, edgeCrop.cropAboveY);
+                        croppedParts.push(cropped);
+                    } else {
                         croppedParts.push({
-                            dataUrl: imageBelow.src,
-                            width: imageBelow.width,
-                            height: imageBelow.height
+                            dataUrl: imageAbove.src,
+                            width: imageAbove.width,
+                            height: imageAbove.height
                         });
+                    }
+
+                    // For the last pair, also add image below (cropped or full)
+                    if (i === uploadedImages.length - 2) {
+                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < imageBelow.height) {
+                            const cropped = cropImage(imageBelow, edgeCrop.cropBelowY, imageBelow.height);
+                            croppedParts.push(cropped);
+                        } else {
+                            croppedParts.push({
+                                dataUrl: imageBelow.src,
+                                width: imageBelow.width,
+                                height: imageBelow.height
+                            });
+                        }
                     }
                 }
             }
