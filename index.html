@@ -1387,7 +1387,9 @@
             }
         }
 
-        function handleMoveModeClick(e) {
+        let pendingMoveModeExit = false;
+
+        function handleMoveModePointerDown(e) {
             if (e.target.closest('.delete-btn-move-mode') ||
                 e.target.closest('.plus-icon')) {
                 return;
@@ -1398,7 +1400,35 @@
                 e.stopPropagation();
             }
 
+            // If inside the scrollable container, defer exit decision to pointerup/pointercancel
+            if (e.target.closest('.screenshot-container')) {
+                pendingMoveModeExit = true;
+                return;
+            }
+
+            // Outside scrollable area (e.g., bottom buttons) - exit immediately
             exitMoveMode();
+        }
+
+        function handleMoveModePointerUp(e) {
+            if (pendingMoveModeExit) {
+                pendingMoveModeExit = false;
+
+                // Check if clicking on a different (non-grayed-out) screenshot item
+                const clickedItem = e.target.closest('.screenshot-item:not(.grayed-out)');
+                if (clickedItem) {
+                    const newIndex = parseInt(clickedItem.dataset.index, 10);
+                    exitMoveMode();
+                    enterMoveMode(newIndex);
+                } else {
+                    exitMoveMode();
+                }
+            }
+        }
+
+        function handleMoveModePointerCancel(e) {
+            // User is scrolling - don't exit move mode
+            pendingMoveModeExit = false;
         }
 
         function enterMoveMode(index) {
@@ -1408,7 +1438,9 @@
             renderMoveMode();
 
             setTimeout(() => {
-                document.addEventListener('pointerdown', handleMoveModeClick, true);
+                document.addEventListener('pointerdown', handleMoveModePointerDown, true);
+                document.addEventListener('pointerup', handleMoveModePointerUp, true);
+                document.addEventListener('pointercancel', handleMoveModePointerCancel, true);
             }, 0);
         }
 
@@ -1552,8 +1584,11 @@
         function exitMoveMode() {
             moveMode = false;
             movingIndex = null;
+            pendingMoveModeExit = false;
 
-            document.removeEventListener('pointerdown', handleMoveModeClick, true);
+            document.removeEventListener('pointerdown', handleMoveModePointerDown, true);
+            document.removeEventListener('pointerup', handleMoveModePointerUp, true);
+            document.removeEventListener('pointercancel', handleMoveModePointerCancel, true);
 
             renderScreenshots();
         }
