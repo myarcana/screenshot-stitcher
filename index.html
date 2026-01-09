@@ -1315,33 +1315,39 @@
                 if (validLCS) {
                     const { length, startA, startB } = validLCS;
 
-                    const croppedCurrent = document.createElement('canvas');
-                    croppedCurrent.width = currentCanvas.width;
-                    croppedCurrent.height = startA;
-                    const croppedCurrentCtx = croppedCurrent.getContext('2d');
-                    croppedCurrentCtx.drawImage(
-                        currentCanvas,
-                        0, 0,
-                        currentCanvas.width, startA,
-                        0, 0,
-                        currentCanvas.width, startA
-                    );
-                    croppedImages.push(croppedCurrent);
+                    // Only create cropped current if there's content above the overlap
+                    if (startA > 0) {
+                        const croppedCurrent = document.createElement('canvas');
+                        croppedCurrent.width = currentCanvas.width;
+                        croppedCurrent.height = startA;
+                        const croppedCurrentCtx = croppedCurrent.getContext('2d');
+                        croppedCurrentCtx.drawImage(
+                            currentCanvas,
+                            0, 0,
+                            currentCanvas.width, startA,
+                            0, 0,
+                            currentCanvas.width, startA
+                        );
+                        croppedImages.push(croppedCurrent);
+                    }
 
-                    const croppedNext = document.createElement('canvas');
-                    croppedNext.width = nextImage.width;
-                    croppedNext.height = nextImage.height - startB;
-                    const croppedNextCtx = croppedNext.getContext('2d');
-                    croppedNextCtx.drawImage(
-                        nextImage,
-                        0, startB,
-                        nextImage.width, nextImage.height - startB,
-                        0, 0,
-                        nextImage.width, nextImage.height - startB
-                    );
+                    const nextHeight = nextImage.height - startB;
+                    if (nextHeight > 0) {
+                        const croppedNext = document.createElement('canvas');
+                        croppedNext.width = nextImage.width;
+                        croppedNext.height = nextHeight;
+                        const croppedNextCtx = croppedNext.getContext('2d');
+                        croppedNextCtx.drawImage(
+                            nextImage,
+                            0, startB,
+                            nextImage.width, nextHeight,
+                            0, 0,
+                            nextImage.width, nextHeight
+                        );
 
-                    currentCanvas = croppedNext;
-                    currentCtx = croppedNextCtx;
+                        currentCanvas = croppedNext;
+                        currentCtx = croppedNextCtx;
+                    }
                 } else {
                     croppedImages.push(currentCanvas);
 
