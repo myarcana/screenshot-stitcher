@@ -1174,53 +1174,78 @@
             return rowSums;
         }
 
-        function rowsMatch(sumA, sumB, tolerance) {
-            const diff = Math.abs(sumA - sumB);
-            const relDiff = diff / Math.max(sumA, sumB);
-            return relDiff <= tolerance;
-        }
-
-        function findLongestCommonSubstring(rowSumsA, rowSumsB) {
+        /**
+         * Find ALL maximal common substrings using seed-and-extend
+         * O(n + m + k) where k is total matches
+         *
+         * @param {number[]} rowSumsA - Row sums from first image
+         * @param {number[]} rowSumsB - Row sums from second image
+         * @param {number} minLength - Minimum match length (default: 4, i.e., > 3 pixels)
+         * @param {number} tolerance - Relative tolerance for matching (default: 0.01 = 1%)
+         * @returns {Array<{startA: number, startB: number, length: number}>}
+         */
+        function findAllMaximalCommonSubstrings(rowSumsA, rowSumsB, minLength = 4, tolerance = 0.01) {
             const n = rowSumsA.length;
             const m = rowSumsB.length;
-            const tolerance = 0.01; // 1% tolerance
 
-            const dp = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            if (n === 0 || m === 0) return [];
 
-            let maxLength = 0;
-            const candidates = [];
+            // Quantize for tolerance
+            const allSums = [...rowSumsA, ...rowSumsB];
+            const maxSum = Math.max(...allSums);
+            const bucketSize = Math.max(1, Math.floor(maxSum * tolerance));
+            const quantize = (sum) => Math.floor(sum / bucketSize);
 
-            for (let i = 1; i <= n; i++) {
-                for (let j = 1; j <= m; j++) {
-                    if (rowsMatch(rowSumsA[i - 1], rowSumsB[j - 1], tolerance)) {
-                        dp[i][j] = dp[i - 1][j - 1] + 1;
+            const quantizedA = rowSumsA.map(quantize);
+            const quantizedB = rowSumsB.map(quantize);
 
-                        if (dp[i][j] > maxLength) {
-                            maxLength = dp[i][j];
-                            candidates.length = 0;
-                            candidates.push({
-                                length: maxLength,
-                                startA: i - maxLength,
-                                startB: j - maxLength
-                            });
-                        } else if (dp[i][j] === maxLength && maxLength > 0) {
-                            candidates.push({
-                                length: maxLength,
-                                startA: i - maxLength,
-                                startB: j - maxLength
-                            });
-                        }
+            // Build index: quantized value -> positions in B
+            const indexB = new Map();
+            for (let j = 0; j < m; j++) {
+                const key = quantizedB[j];
+                if (!indexB.has(key)) indexB.set(key, []);
+                indexB.get(key).push(j);
+            }
+
+            const matches = [];
+
+            // For each position in A, find matching positions in B and extend
+            for (let i = 0; i < n; i++) {
+                const key = quantizedA[i];
+                const positions = indexB.get(key);
+                if (!positions) continue;
+
+                for (const j of positions) {
+                    // Only start maximal matches - skip if we can extend left
+                    if (i > 0 && j > 0 && quantizedA[i - 1] === quantizedB[j - 1]) {
+                        continue;
+                    }
+
+                    // Extend right as far as possible
+                    let len = 0;
+                    while (i + len < n && j + len < m &&
+                           quantizedA[i + len] === quantizedB[j + len]) {
+                        len++;
+                    }
+
+                    if (len >= minLength) {
+                        matches.push({ startA: i, startB: j, length: len });
                     }
                 }
             }
 
-            return candidates;
+            return matches;
         }
 
-        function validateAndSelectLCS(candidates, lengthA, lengthB) {
-            for (let candidate of candidates) {
-                const { length, startA, startB } = candidate;
+        /**
+         * Select the best match for stitching from all maximal common substrings
+         * Prefers matches that represent actual scroll overlap (different positions in A and B)
+         */
+        function selectBestMatchForStitching(matches, lengthA, lengthB) {
+            for (const match of matches) {
+                const { length, startA, startB } = match;
 
+                // Skip if overlap starts at same position (not actual scroll overlap)
                 if (startA === startB) {
                     continue;
                 }
@@ -1231,11 +1256,12 @@
                 const distanceFromEndA = lengthA - 1 - endA;
                 const distanceFromEndB = lengthB - 1 - endB;
 
+                // Skip if remaining content is same length (not actual scroll overlap)
                 if (distanceFromEndA === distanceFromEndB) {
                     continue;
                 }
 
-                return candidate;
+                return match;
             }
 
             return null;
@@ -1273,9 +1299,9 @@
                 const rowSumsA = computeRowSums(imageAForFingerprint);
                 const rowSumsB = computeRowSums(imageBForFingerprint);
 
-                const candidates = findLongestCommonSubstring(rowSumsA, rowSumsB);
+                const allMatches = findAllMaximalCommonSubstrings(rowSumsA, rowSumsB);
 
-                const validLCS = validateAndSelectLCS(candidates, rowSumsA.length, rowSumsB.length);
+                const validLCS = selectBestMatchForStitching(allMatches, rowSumsA.length, rowSumsB.length);
 
                 if (validLCS) {
                     const { length, startA, startB } = validLCS;
