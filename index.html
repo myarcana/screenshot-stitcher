@@ -1069,6 +1069,8 @@
             const items = document.querySelectorAll('.screenshot-item');
 
             items.forEach((item, index) => {
+                let pendingMoveMode = false;
+
                 item.addEventListener('pointerdown', (e) => {
                     if (moveMode) {
                         return;
@@ -1076,8 +1078,19 @@
                     if (e.target.closest('.delete-btn-move-mode')) {
                         return;
                     }
+                    pendingMoveMode = true;
+                });
 
-                    enterMoveMode(index);
+                item.addEventListener('pointerup', () => {
+                    if (pendingMoveMode) {
+                        pendingMoveMode = false;
+                        enterMoveMode(index);
+                    }
+                });
+
+                item.addEventListener('pointercancel', () => {
+                    // Browser took over (e.g., for scrolling) - don't enter move mode
+                    pendingMoveMode = false;
                 });
             });
         }
