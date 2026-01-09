@@ -11,6 +11,7 @@
     <link rel="apple-touch-icon" sizes="167x167" href="icon-167.png">
     <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
     <title>Screenshot Stitcher</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -675,6 +676,299 @@
         let moveMode = false;
         let movingIndex = null;
 
+        // OCR cache: maps image id to OCR promise (not result)
+        // This ensures we never start duplicate OCR tasks
+        const ocrPromiseCache = new Map();
+
+        // Shared Tesseract worker for faster sequential OCR
+        let tesseractWorker = null;
+
+        async function getTesseractWorker() {
+            if (!tesseractWorker) {
+                tesseractWorker = await Tesseract.createWorker('eng', 1, {
+                    langPath: 'https://tessdata.projectnaptha.com/4.0.0_fast',
+                    logger: () => {},
+                });
+                await tesseractWorker.setParameters({
+                    tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+                });
+            }
+            return tesseractWorker;
+        }
+
+        // Start OCR on a single image - returns cached promise if already running/complete
+        function runOCR(imageData) {
+            if (ocrPromiseCache.has(imageData.id)) {
+                return ocrPromiseCache.get(imageData.id);
+            }
+
+            const promise = (async () => {
+                try {
+                    const worker = await getTesseractWorker();
+                    const result = await worker.recognize(imageData.src);
+
+                    // Extract lines with their bounding boxes
+                    const lines = [];
+                    if (result.data && result.data.lines) {
+                        for (const line of result.data.lines) {
+                            // Check if text is approximately horizontal (small baseline angle)
+                            // Tesseract provides baseline info - if skew is too high, skip
+                            if (line.baseline && Math.abs(line.baseline.y1 - line.baseline.y0) > line.bbox.x1 - line.bbox.x0) {
+                                continue; // Skip non-horizontal text
+                            }
+
+                            lines.push({
+                                text: line.text.trim(),
+                                bbox: line.bbox, // {x0, y0, x1, y1}
+                                y: line.bbox.y0 // Top y position for sorting
+                            });
+                        }
+                    }
+
+                    // Sort lines by y position (top to bottom)
+                    lines.sort((a, b) => a.y - b.y);
+
+                    // Generate hash for each line based on text content
+                    const hashedLines = lines.map(line => ({
+                        ...line,
+                        hash: hashString(line.text)
+                    }));
+
+                    return {
+                        lines: hashedLines,
+                        imageWidth: imageData.width,
+                        imageHeight: imageData.height
+                    };
+                } catch (error) {
+                    console.error('OCR error:', error);
+                    return { lines: [], imageWidth: imageData.width, imageHeight: imageData.height };
+                }
+            })();
+
+            ocrPromiseCache.set(imageData.id, promise);
+            return promise;
+        }
+
+        // Simple string hash function
+        function hashString(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32-bit integer
+            }
+            return hash.toString(16);
+        }
+
+        // Find longest common substring of hashes between two arrays
+        // Returns: { startA, startB, length } or null if no match
+        function findLongestCommonSubstring(hashesA, hashesB, minYDiff = 0, avgLineHeight = 0) {
+            if (hashesA.length === 0 || hashesB.length === 0) return null;
+
+            let best = null;
+
+            // Build a map of hash -> indices in B for faster lookup
+            const hashIndicesB = new Map();
+            for (let j = 0; j < hashesB.length; j++) {
+                const h = hashesB[j].hash;
+                if (!hashIndicesB.has(h)) {
+                    hashIndicesB.set(h, []);
+                }
+                hashIndicesB.get(h).push(j);
+            }
+
+            // For each position in A, try to find matching sequences in B
+            for (let i = 0; i < hashesA.length; i++) {
+                const hash = hashesA[i].hash;
+                const matchingIndices = hashIndicesB.get(hash) || [];
+
+                for (const j of matchingIndices) {
+                    // Check if y-difference constraint is satisfied
+                    if (minYDiff > 0) {
+                        const yDiffRatio = Math.abs(hashesA[i].y - hashesB[j].y) / avgLineHeight;
+                        if (yDiffRatio < 0.5) {
+                            continue; // Y positions too similar, skip
+                        }
+                    }
+
+                    // Extend the match as far as possible
+                    let len = 1;
+                    while (i + len < hashesA.length &&
+                           j + len < hashesB.length &&
+                           hashesA[i + len].hash === hashesB[j + len].hash) {
+                        len++;
+                    }
+
+                    if (!best || len > best.length) {
+                        best = { startA: i, startB: j, length: len };
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        // Crop image using canvas
+        function cropImage(imageData, yStart, yEnd) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            const cropHeight = yEnd - yStart;
+            canvas.width = imageData.width;
+            canvas.height = cropHeight;
+
+            ctx.drawImage(
+                imageData.img,
+                0, yStart,                    // Source x, y
+                imageData.width, cropHeight,   // Source width, height
+                0, 0,                          // Dest x, y
+                imageData.width, cropHeight    // Dest width, height
+            );
+
+            return {
+                dataUrl: canvas.toDataURL('image/png'),
+                width: imageData.width,
+                height: cropHeight
+            };
+        }
+
+        // Stitch multiple cropped images vertically
+        function stitchImages(croppedImages) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Calculate total height and max width
+            let totalHeight = 0;
+            let maxWidth = 0;
+            for (const img of croppedImages) {
+                totalHeight += img.height;
+                maxWidth = Math.max(maxWidth, img.width);
+            }
+
+            canvas.width = maxWidth;
+            canvas.height = totalHeight;
+
+            // Draw each image
+            let currentY = 0;
+            const loadPromises = croppedImages.map((cropped, index) => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        resolve({ img, index, height: cropped.height });
+                    };
+                    img.src = cropped.dataUrl;
+                });
+            });
+
+            return Promise.all(loadPromises).then(results => {
+                // Sort by original index to maintain order
+                results.sort((a, b) => a.index - b.index);
+
+                let y = 0;
+                for (const { img, height } of results) {
+                    ctx.drawImage(img, 0, y);
+                    y += height;
+                }
+
+                return canvas.toDataURL('image/png');
+            });
+        }
+
+        // Main stitching algorithm
+        async function stitchScreenshots() {
+            if (uploadedImages.length === 0) return null;
+            if (uploadedImages.length === 1) {
+                return uploadedImages[0].src;
+            }
+
+            // Run OCR on all images
+            const ocrResults = await Promise.all(
+                uploadedImages.map(img => runOCR(img))
+            );
+
+            // Process images in pairs
+            const croppedParts = [];
+
+            for (let i = 0; i < uploadedImages.length - 1; i++) {
+                const imageAbove = uploadedImages[i];
+                const imageBelow = uploadedImages[i + 1];
+                const ocrAbove = ocrResults[i];
+                const ocrBelow = ocrResults[i + 1];
+
+                // Calculate average line height for y-diff threshold
+                let avgLineHeight = 30; // Default fallback
+                if (ocrAbove.lines.length > 0) {
+                    const heights = ocrAbove.lines.map(l => l.bbox.y1 - l.bbox.y0);
+                    avgLineHeight = heights.reduce((a, b) => a + b, 0) / heights.length;
+                }
+
+                // Find longest common substring with y-diff constraint
+                const match = findLongestCommonSubstring(
+                    ocrAbove.lines,
+                    ocrBelow.lines,
+                    avgLineHeight * 0.5, // Min y-diff is 50% of line height
+                    avgLineHeight
+                );
+
+                if (match && match.length > 0) {
+                    // Get the y position of the matching region in image above
+                    const matchedLineAbove = ocrAbove.lines[match.startA];
+                    const matchedLineBelow = ocrBelow.lines[match.startB];
+
+                    // Crop image above: from y=0 to top of matched region
+                    const cropYEnd = matchedLineAbove.y;
+                    if (cropYEnd > 0) {
+                        const cropped = cropImage(imageAbove, 0, cropYEnd);
+                        croppedParts.push(cropped);
+                    }
+
+                    // For the last pair, also add the bottom part of image below
+                    if (i === uploadedImages.length - 2) {
+                        // Crop image below: from top of matched region to bottom
+                        const cropYStart = matchedLineBelow.y;
+                        const cropped = cropImage(imageBelow, cropYStart, imageBelow.height);
+                        croppedParts.push(cropped);
+                    }
+                } else {
+                    // No match found - include entire image above
+                    croppedParts.push({
+                        dataUrl: imageAbove.src,
+                        width: imageAbove.width,
+                        height: imageAbove.height
+                    });
+
+                    // For the last pair, also add entire image below
+                    if (i === uploadedImages.length - 2) {
+                        croppedParts.push({
+                            dataUrl: imageBelow.src,
+                            width: imageBelow.width,
+                            height: imageBelow.height
+                        });
+                    }
+                }
+            }
+
+            // If no parts were created (edge case), just use all images
+            if (croppedParts.length === 0) {
+                return uploadedImages.map(img => ({
+                    dataUrl: img.src,
+                    width: img.width,
+                    height: img.height
+                }));
+            }
+
+            // Stitch all cropped parts together
+            return stitchImages(croppedParts);
+        }
+
+        // Start OCR processing for new images
+        function startOCRProcessing(newImages) {
+            // Run OCR in background for each new image
+            for (const img of newImages) {
+                runOCR(img).catch(err => console.error('OCR failed:', err));
+            }
+        }
+
         function showView(viewNumber, pushState = true) {
             document.querySelectorAll('.view').forEach(view => {
                 view.classList.remove('active');
@@ -723,29 +1017,34 @@
 
         function handleFiles(files) {
             const fileArray = Array.from(files).filter(file => file.type.startsWith('image/'));
-            
+
             if (fileArray.length === 0) return;
 
             let loadedCount = 0;
+            const newImages = []; // Track newly added images for OCR
             fileArray.forEach(file => {
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     const img = new Image();
                     img.onload = () => {
-                        uploadedImages.push({
+                        const imageData = {
                             src: e.target.result,
                             img: img,
                             id: Date.now() + Math.random(),
                             width: img.width,
                             height: img.height
-                        });
+                        };
+                        uploadedImages.push(imageData);
+                        newImages.push(imageData);
                         loadedCount++;
-                        
+
                         if (loadedCount === fileArray.length) {
                             if (currentView === 1) {
                                 showView(2);
                             }
                             renderScreenshots();
+                            // Start OCR processing for new images in background
+                            startOCRProcessing(newImages);
                         }
                     };
                     img.src = e.target.result;
@@ -784,6 +1083,12 @@
         }
 
         function deleteScreenshot(index) {
+            // Remove from OCR cache before deleting
+            const imageToDelete = uploadedImages[index];
+            if (imageToDelete) {
+                ocrPromiseCache.delete(imageToDelete.id);
+            }
+
             uploadedImages.splice(index, 1);
 
             if (moveMode) {
@@ -968,29 +1273,77 @@
             renderScreenshots();
         }
 
-        combineBtn.addEventListener('pointerdown', () => {
+        combineBtn.addEventListener('pointerdown', async () => {
             if (uploadedImages.length < 2) return;
-            displayResult();
+            combineBtn.disabled = true;
+            combineBtn.textContent = 'Processing...';
             showView(3);
+            await displayResult();
+            combineBtn.disabled = false;
+            combineBtn.textContent = 'Combine';
         });
 
-        function displayResult() {
-            const imagesHtml = uploadedImages.map((img, index) =>
-                `<img src="${img.src}" class="result-image" alt="Screenshot ${index + 1}">`
-            ).join('');
-
+        async function displayResult() {
+            // Show loading state
             resultContainer.innerHTML = `
-                ${imagesHtml}
-                <div class="result-actions">
-                    <button class="edit-btn" onclick="showView(2)">
-                        Edit
-                    </button>
+                <div style="text-align: center; padding: 40px; color: #fff;">
+                    <div style="font-size: 24px; font-weight: 900; margin-bottom: 20px;">STITCHING IMAGES...</div>
+                    <div style="font-size: 16px;">Running OCR and finding overlaps</div>
                 </div>
             `;
+
+            try {
+                // Run the stitching algorithm
+                const stitchedImageUrl = await stitchScreenshots();
+
+                if (stitchedImageUrl) {
+                    resultContainer.innerHTML = `
+                        <img src="${stitchedImageUrl}" class="result-image" alt="Stitched Screenshot">
+                        <div class="result-actions">
+                            <button class="edit-btn" onclick="showView(2)">
+                                Edit
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    // Fallback: show all images if stitching failed
+                    const imagesHtml = uploadedImages.map((img, index) =>
+                        `<img src="${img.src}" class="result-image" alt="Screenshot ${index + 1}">`
+                    ).join('');
+
+                    resultContainer.innerHTML = `
+                        ${imagesHtml}
+                        <div class="result-actions">
+                            <button class="edit-btn" onclick="showView(2)">
+                                Edit
+                            </button>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Stitching error:', error);
+                // Fallback: show all images
+                const imagesHtml = uploadedImages.map((img, index) =>
+                    `<img src="${img.src}" class="result-image" alt="Screenshot ${index + 1}">`
+                ).join('');
+
+                resultContainer.innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: #fff; font-weight: 900;">
+                        Could not stitch images automatically. Showing original images:
+                    </div>
+                    ${imagesHtml}
+                    <div class="result-actions">
+                        <button class="edit-btn" onclick="showView(2)">
+                            Edit
+                        </button>
+                    </div>
+                `;
+            }
         }
 
         function startOver() {
             uploadedImages = [];
+            ocrPromiseCache.clear();
             showView(1);
         }
     </script>
