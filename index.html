@@ -1277,49 +1277,24 @@
             if (uploadedImages.length < 2) return;
             combineBtn.disabled = true;
             combineBtn.textContent = 'Processing...';
-            showView(3);
             await displayResult();
+            showView(3);
             combineBtn.disabled = false;
             combineBtn.textContent = 'Combine';
         });
 
         async function displayResult() {
-            // Show loading state
-            resultContainer.innerHTML = `
-                <div style="text-align: center; padding: 40px; color: #fff;">
-                    <div style="font-size: 24px; font-weight: 900; margin-bottom: 20px;">STITCHING IMAGES...</div>
-                    <div style="font-size: 16px;">Running OCR and finding overlaps</div>
-                </div>
-            `;
-
             try {
-                // Run the stitching algorithm
                 const stitchedImageUrl = await stitchScreenshots();
 
-                if (stitchedImageUrl) {
-                    resultContainer.innerHTML = `
-                        <img src="${stitchedImageUrl}" class="result-image" alt="Stitched Screenshot">
-                        <div class="result-actions">
-                            <button class="edit-btn" onclick="showView(2)">
-                                Edit
-                            </button>
-                        </div>
-                    `;
-                } else {
-                    // Fallback: show all images if stitching failed
-                    const imagesHtml = uploadedImages.map((img, index) =>
-                        `<img src="${img.src}" class="result-image" alt="Screenshot ${index + 1}">`
-                    ).join('');
-
-                    resultContainer.innerHTML = `
-                        ${imagesHtml}
-                        <div class="result-actions">
-                            <button class="edit-btn" onclick="showView(2)">
-                                Edit
-                            </button>
-                        </div>
-                    `;
-                }
+                resultContainer.innerHTML = `
+                    <img src="${stitchedImageUrl}" class="result-image" alt="Stitched Screenshot">
+                    <div class="result-actions">
+                        <button class="edit-btn" onclick="showView(2)">
+                            Edit
+                        </button>
+                    </div>
+                `;
             } catch (error) {
                 console.error('Stitching error:', error);
                 // Fallback: show all images
@@ -1328,9 +1303,6 @@
                 ).join('');
 
                 resultContainer.innerHTML = `
-                    <div style="text-align: center; padding: 20px; color: #fff; font-weight: 900;">
-                        Could not stitch images automatically. Showing original images:
-                    </div>
                     ${imagesHtml}
                     <div class="result-actions">
                         <button class="edit-btn" onclick="showView(2)">
