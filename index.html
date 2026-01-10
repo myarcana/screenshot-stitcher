@@ -771,7 +771,8 @@
                             lines.push({
                                 text: line.text.trim(),
                                 bbox: line.bbox, // {x0, y0, x1, y1}
-                                y: line.bbox.y0 // Top y position for sorting
+                                y: line.bbox.y0, // Top y position for sorting
+                                confidence: line.confidence // 0-100 confidence score
                             });
                         }
                     }
@@ -860,8 +861,9 @@
 
                 // Background for text readability
                 const hashText = `#${line.hash}`;
-                const displayText = line.text.length > 40 ? line.text.substring(0, 37) + '...' : line.text;
-                const labelText = `${hashText}: ${displayText}`;
+                const confText = `[${Math.round(line.confidence)}%]`;
+                const displayText = line.text.length > 30 ? line.text.substring(0, 27) + '...' : line.text;
+                const labelText = `${hashText} ${confText}: ${displayText}`;
 
                 const textMetrics = ctx.measureText(labelText);
                 const textHeight = fontSize + 4;
@@ -1296,8 +1298,9 @@
                     ctx.font = `bold ${fontSize}px monospace`;
 
                     const hashText = `#${line.hash}`;
-                    const displayText = line.text.length > 40 ? line.text.substring(0, 37) + '...' : line.text;
-                    const labelText = `${hashText}: ${displayText}`;
+                    const confText = `[${Math.round(line.confidence)}%]`;
+                    const displayText = line.text.length > 30 ? line.text.substring(0, 27) + '...' : line.text;
+                    const labelText = `${hashText} ${confText}: ${displayText}`;
 
                     const textMetrics = ctx.measureText(labelText);
                     const textHeight = fontSize + 4;
