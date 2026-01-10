@@ -784,18 +784,54 @@
                     const hashedLines = lines
                         .map(line => {
                             const normalizedText = normalizeOCRText(line.text);
+                            // Calculate font size as height of bounding box
+                            const fontSize = line.bbox.y1 - line.bbox.y0;
                             return {
                                 ...line,
                                 text: normalizedText,
-                                hash: hashString(normalizedText)
+                                hash: hashString(normalizedText),
+                                fontSize: fontSize,
+                                leftEdge: line.bbox.x0,
+                                rightEdge: line.bbox.x1
                             };
                         })
                         .filter(line => line.text.length > 0);  // Remove entries with empty text
 
+                    // Apply greedy interval grouping for font sizes (2px intervals)
+                    const fontSizeGrouping = createGroupMapping(
+                        hashedLines,
+                        line => line.fontSize,
+                        2
+                    );
+
+                    // Apply greedy interval grouping for left edges (7px intervals)
+                    const leftEdgeGrouping = createGroupMapping(
+                        hashedLines,
+                        line => line.leftEdge,
+                        7
+                    );
+
+                    // Apply greedy interval grouping for right edges (7px intervals)
+                    const rightEdgeGrouping = createGroupMapping(
+                        hashedLines,
+                        line => line.rightEdge,
+                        7
+                    );
+
+                    // Add group IDs to each line
+                    for (const line of hashedLines) {
+                        line.fontSizeGroup = fontSizeGrouping.mapping.get(line);
+                        line.leftEdgeGroup = leftEdgeGrouping.mapping.get(line);
+                        line.rightEdgeGroup = rightEdgeGrouping.mapping.get(line);
+                    }
+
                     return {
                         lines: hashedLines,
                         imageWidth: imageData.width,
-                        imageHeight: imageData.height
+                        imageHeight: imageData.height,
+                        fontSizeGroups: fontSizeGrouping.groups,
+                        leftEdgeGroups: leftEdgeGrouping.groups,
+                        rightEdgeGroups: rightEdgeGrouping.groups
                     };
                 } catch (error) {
                     console.error('OCR error:', error);
@@ -831,6 +867,63 @@
             return hash.toString(16);
         }
 
+        // Greedy interval grouping algorithm
+        // Groups items by numeric values such that within each group, max - min < maxSpan
+        // Returns array of { groupId, items: [...], minValue, maxValue }
+        function greedyIntervalGrouping(items, getValue, maxSpan) {
+            if (items.length === 0) return [];
+
+            // Create array of { item, value } and sort by value
+            const itemsWithValues = items.map(item => ({
+                item,
+                value: getValue(item)
+            }));
+            itemsWithValues.sort((a, b) => a.value - b.value);
+
+            const groups = [];
+            let currentGroup = {
+                groupId: 0,
+                items: [itemsWithValues[0].item],
+                minValue: itemsWithValues[0].value,
+                maxValue: itemsWithValues[0].value
+            };
+
+            for (let i = 1; i < itemsWithValues.length; i++) {
+                const { item, value } = itemsWithValues[i];
+
+                // Check if we can add to current group (value - groupStart < maxSpan)
+                if (value - currentGroup.minValue < maxSpan) {
+                    currentGroup.items.push(item);
+                    currentGroup.maxValue = value;
+                } else {
+                    // Close current group and start new one
+                    groups.push(currentGroup);
+                    currentGroup = {
+                        groupId: groups.length,
+                        items: [item],
+                        minValue: value,
+                        maxValue: value
+                    };
+                }
+            }
+            // Push final group
+            groups.push(currentGroup);
+
+            return groups;
+        }
+
+        // Apply grouping and return a Map from item to groupId
+        function createGroupMapping(items, getValue, maxSpan) {
+            const groups = greedyIntervalGrouping(items, getValue, maxSpan);
+            const mapping = new Map();
+            for (const group of groups) {
+                for (const item of group.items) {
+                    mapping.set(item, group.groupId);
+                }
+            }
+            return { groups, mapping };
+        }
+
         // Generate a consistent color from a hash string
         function hashToColor(hash) {
             // Use the hash to generate HSL color with high saturation for visibility
@@ -864,43 +957,98 @@
             for (const line of ocrResult.lines) {
                 const color = hashToColor(line.hash);
                 const bbox = line.bbox;
+                const boxWidth = bbox.x1 - bbox.x0;
+                const boxHeight = bbox.y1 - bbox.y0;
 
                 // Draw bounding box
                 ctx.strokeStyle = color;
                 ctx.lineWidth = 2;
-                ctx.strokeRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
+                ctx.strokeRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
                 // Semi-transparent fill for visibility
                 ctx.fillStyle = color.replace('50%)', '50%, 0.1)').replace('hsl', 'hsla');
-                ctx.fillRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
+                ctx.fillRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
-                // Draw hash (small font) and text above the bounding box
-                const fontSize = Math.max(10, Math.min(14, (bbox.y1 - bbox.y0) * 0.4));
-                ctx.font = `bold ${fontSize}px monospace`;
+                // Draw multi-line label inside the bounding box
+                // Order: font group, left group, right group, confidence, hash, text
+                const labelText = `F${line.fontSizeGroup} L${line.leftEdgeGroup} R${line.rightEdgeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
 
-                // Background for text readability
-                const hashText = `#${line.hash}`;
-                const confText = `[${Math.round(line.confidence)}%]`;
-                const displayText = line.text.length > 30 ? line.text.substring(0, 27) + '...' : line.text;
-                const labelText = `${hashText} ${confText}: ${displayText}`;
+                const padding = 4;
+                const availableWidth = boxWidth - padding * 2;
+                const availableHeight = boxHeight - padding * 2;
 
-                const textMetrics = ctx.measureText(labelText);
-                const textHeight = fontSize + 4;
-                const textY = bbox.y0 - 4;
-                const textX = bbox.x0;
+                // Use font size based on box height, clamped to reasonable range
+                const labelFontSize = Math.max(8, Math.min(14, Math.floor(boxHeight * 0.3)));
+                ctx.font = `bold ${labelFontSize}px monospace`;
+                const lineHeight = labelFontSize * 1.2;
 
-                // Draw background rectangle for label
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                ctx.fillRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+                // Word-wrap text to fit available width
+                const words = labelText.split(' ');
+                const wrappedLines = [];
+                let currentLine = '';
+
+                for (const word of words) {
+                    const testLine = currentLine ? currentLine + ' ' + word : word;
+                    if (ctx.measureText(testLine).width <= availableWidth) {
+                        currentLine = testLine;
+                    } else {
+                        if (currentLine) {
+                            wrappedLines.push(currentLine);
+                        }
+                        // If single word is too wide, it goes on its own line (will be truncated later if needed)
+                        currentLine = word;
+                    }
+                }
+                if (currentLine) {
+                    wrappedLines.push(currentLine);
+                }
+
+                // Calculate how many lines fit
+                const maxLines = Math.max(1, Math.floor(availableHeight / lineHeight));
+
+                // If we have more lines than fit, truncate the last visible line with ellipsis
+                const displayLines = wrappedLines.slice(0, maxLines);
+                if (wrappedLines.length > maxLines ||
+                    (displayLines.length > 0 && ctx.measureText(displayLines[displayLines.length - 1]).width > availableWidth)) {
+                    // Truncate last line if needed
+                    let lastLine = displayLines[displayLines.length - 1] || '';
+                    // Add remaining content that didn't fit
+                    if (wrappedLines.length > maxLines) {
+                        lastLine = lastLine + ' ' + wrappedLines.slice(maxLines).join(' ');
+                    }
+                    // Truncate with ellipsis
+                    while (lastLine.length > 0 && ctx.measureText(lastLine + '...').width > availableWidth) {
+                        lastLine = lastLine.slice(0, -1);
+                    }
+                    displayLines[displayLines.length - 1] = lastLine + (lastLine.length < (wrappedLines.length > maxLines ? wrappedLines.slice(maxLines).join(' ').length + displayLines[displayLines.length - 1].length : displayLines[displayLines.length - 1].length) ? '...' : '');
+                }
+
+                // Calculate label background dimensions
+                let maxLineWidth = 0;
+                for (const dl of displayLines) {
+                    maxLineWidth = Math.max(maxLineWidth, ctx.measureText(dl).width);
+                }
+                const labelWidth = Math.min(maxLineWidth + padding * 2, boxWidth);
+                const labelHeight = Math.min(displayLines.length * lineHeight + padding, boxHeight);
+
+                // Position inside the bounding box (top-left with padding)
+                const labelX = bbox.x0 + padding;
+                const labelY = bbox.y0 + padding;
+
+                // Draw background rectangle for label (inside the box)
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fillRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
 
                 // Draw text border for better visibility
                 ctx.strokeStyle = color;
                 ctx.lineWidth = 1;
-                ctx.strokeRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+                ctx.strokeRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
 
-                // Draw the label text
+                // Draw the label text lines
                 ctx.fillStyle = '#000';
-                ctx.fillText(labelText, textX, textY - 2);
+                for (let li = 0; li < displayLines.length; li++) {
+                    ctx.fillText(displayLines[li], labelX, labelY + labelFontSize + li * lineHeight);
+                }
             }
 
             return {
@@ -1304,40 +1452,96 @@
                 for (const line of ocrResult.lines) {
                     const color = hashToColor(line.hash);
                     const bbox = line.bbox;
+                    const boxWidth = bbox.x1 - bbox.x0;
+                    const boxHeight = bbox.y1 - bbox.y0;
 
                     ctx.strokeStyle = color;
                     ctx.lineWidth = 2;
-                    ctx.strokeRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
+                    ctx.strokeRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
                     ctx.fillStyle = color.replace('50%)', '50%, 0.1)').replace('hsl', 'hsla');
-                    ctx.fillRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
+                    ctx.fillRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
-                    // Draw hash and text label above the bounding box
-                    const fontSize = Math.max(10, Math.min(14, (bbox.y1 - bbox.y0) * 0.4));
-                    ctx.font = `bold ${fontSize}px monospace`;
+                    // Draw multi-line label inside the bounding box
+                    // Order: font group, left group, right group, confidence, hash, text
+                    const labelText = `F${line.fontSizeGroup} L${line.leftEdgeGroup} R${line.rightEdgeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
 
-                    const hashText = `#${line.hash}`;
-                    const confText = `[${Math.round(line.confidence)}%]`;
-                    const displayText = line.text.length > 30 ? line.text.substring(0, 27) + '...' : line.text;
-                    const labelText = `${hashText} ${confText}: ${displayText}`;
+                    const padding = 4;
+                    const availableWidth = boxWidth - padding * 2;
+                    const availableHeight = boxHeight - padding * 2;
 
-                    const textMetrics = ctx.measureText(labelText);
-                    const textHeight = fontSize + 4;
-                    const textY = bbox.y0 - 4;
-                    const textX = bbox.x0;
+                    // Use font size based on box height, clamped to reasonable range
+                    const labelFontSize = Math.max(8, Math.min(14, Math.floor(boxHeight * 0.3)));
+                    ctx.font = `bold ${labelFontSize}px monospace`;
+                    const lineHeight = labelFontSize * 1.2;
 
-                    // Draw background rectangle for label
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                    ctx.fillRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+                    // Word-wrap text to fit available width
+                    const words = labelText.split(' ');
+                    const wrappedLines = [];
+                    let currentLine = '';
+
+                    for (const word of words) {
+                        const testLine = currentLine ? currentLine + ' ' + word : word;
+                        if (ctx.measureText(testLine).width <= availableWidth) {
+                            currentLine = testLine;
+                        } else {
+                            if (currentLine) {
+                                wrappedLines.push(currentLine);
+                            }
+                            // If single word is too wide, it goes on its own line (will be truncated later if needed)
+                            currentLine = word;
+                        }
+                    }
+                    if (currentLine) {
+                        wrappedLines.push(currentLine);
+                    }
+
+                    // Calculate how many lines fit
+                    const maxLines = Math.max(1, Math.floor(availableHeight / lineHeight));
+
+                    // If we have more lines than fit, truncate the last visible line with ellipsis
+                    const displayLines = wrappedLines.slice(0, maxLines);
+                    if (wrappedLines.length > maxLines ||
+                        (displayLines.length > 0 && ctx.measureText(displayLines[displayLines.length - 1]).width > availableWidth)) {
+                        // Truncate last line if needed
+                        let lastLine = displayLines[displayLines.length - 1] || '';
+                        // Add remaining content that didn't fit
+                        if (wrappedLines.length > maxLines) {
+                            lastLine = lastLine + ' ' + wrappedLines.slice(maxLines).join(' ');
+                        }
+                        // Truncate with ellipsis
+                        while (lastLine.length > 0 && ctx.measureText(lastLine + '...').width > availableWidth) {
+                            lastLine = lastLine.slice(0, -1);
+                        }
+                        displayLines[displayLines.length - 1] = lastLine + (lastLine.length < (wrappedLines.length > maxLines ? wrappedLines.slice(maxLines).join(' ').length + displayLines[displayLines.length - 1].length : displayLines[displayLines.length - 1].length) ? '...' : '');
+                    }
+
+                    // Calculate label background dimensions
+                    let maxLineWidth = 0;
+                    for (const dl of displayLines) {
+                        maxLineWidth = Math.max(maxLineWidth, ctx.measureText(dl).width);
+                    }
+                    const labelWidth = Math.min(maxLineWidth + padding * 2, boxWidth);
+                    const labelHeight = Math.min(displayLines.length * lineHeight + padding, boxHeight);
+
+                    // Position inside the bounding box (top-left with padding)
+                    const labelX = bbox.x0 + padding;
+                    const labelY = bbox.y0 + padding;
+
+                    // Draw background rectangle for label (inside the box)
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.fillRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
 
                     // Draw text border for better visibility
                     ctx.strokeStyle = color;
                     ctx.lineWidth = 1;
-                    ctx.strokeRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+                    ctx.strokeRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
 
-                    // Draw the label text
+                    // Draw the label text lines
                     ctx.fillStyle = '#000';
-                    ctx.fillText(labelText, textX, textY - 2);
+                    for (let li = 0; li < displayLines.length; li++) {
+                        ctx.fillText(displayLines[li], labelX, labelY + labelFontSize + li * lineHeight);
+                    }
                 }
 
                 // Draw match region from comparison with PREVIOUS image (this image as "below")
