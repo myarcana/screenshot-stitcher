@@ -1383,222 +1383,103 @@
             });
         }
 
-        // Main stitching algorithm - DEBUG MODE: no cropping, just visualize matches
+        // Main stitching algorithm
         async function stitchScreenshots() {
             if (uploadedImages.length === 0) return null;
+            if (uploadedImages.length === 1) {
+                return uploadedImages[0].src;
+            }
 
             // Run OCR on all images
             const ocrResults = await Promise.all(
                 uploadedImages.map(img => runOCR(img))
             );
 
-            // Find all matches between consecutive pairs first
-            const matches = [];
+            // Process images in pairs
+            const croppedParts = [];
+
             for (let i = 0; i < uploadedImages.length - 1; i++) {
+                const imageAbove = uploadedImages[i];
+                const imageBelow = uploadedImages[i + 1];
                 const ocrAbove = ocrResults[i];
                 const ocrBelow = ocrResults[i + 1];
 
+                // Calculate average line height for minimum Y difference threshold
                 let avgLineHeight = 30;
                 if (ocrAbove.lines.length > 0) {
                     const heights = ocrAbove.lines.map(l => l.bbox.y1 - l.bbox.y0);
                     avgLineHeight = heights.reduce((a, b) => a + b, 0) / heights.length;
                 }
 
+                // Find longest common substring of hashes
                 const match = findLongestCommonSubstring(
                     ocrAbove.lines,
                     ocrBelow.lines,
                     avgLineHeight * 0.5
                 );
 
-                matches.push(match);
-            }
+                if (match && match.length > 0) {
+                    // Found matching region
+                    const matchedLineAbove = ocrAbove.lines[match.startA];
+                    const matchedLineBelow = ocrBelow.lines[match.startB];
 
-            // Create debug images with OCR boxes AND match region highlights
-            const annotatedImages = [];
-            for (let i = 0; i < uploadedImages.length; i++) {
-                const img = uploadedImages[i];
-                const ocrResult = ocrResults[i];
+                    // Crop image above: from y=0 to top of matched region
+                    const cropYEnd = matchedLineAbove.y;
+                    if (cropYEnd > 0) {
+                        const cropped = cropImage(imageAbove, 0, cropYEnd);
+                        croppedParts.push(cropped);
+                    }
 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width;
-                canvas.height = img.height;
+                    // For the last pair, also add the bottom part of image below
+                    if (i === uploadedImages.length - 2) {
+                        // Crop image below: from top of matched region to bottom
+                        const cropYStart = matchedLineBelow.y;
+                        const cropped = cropImage(imageBelow, cropYStart, imageBelow.height);
+                        croppedParts.push(cropped);
+                    }
+                } else {
+                    // No match found - try horizontal edge detection as fallback
+                    const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
 
-                // Draw the original image
-                ctx.drawImage(img.img, 0, 0);
+                    // Crop image above: use edge if found, otherwise full image
+                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > 0) {
+                        const cropped = cropImage(imageAbove, 0, edgeCrop.cropAboveY);
+                        croppedParts.push(cropped);
+                    } else {
+                        croppedParts.push({
+                            dataUrl: imageAbove.src,
+                            width: imageAbove.width,
+                            height: imageAbove.height
+                        });
+                    }
 
-                // Draw OCR bounding boxes (existing debug visualization)
-                for (const line of ocrResult.lines) {
-                    const color = hashToColor(line.hash);
-                    const bbox = line.bbox;
-                    const boxWidth = bbox.x1 - bbox.x0;
-                    const boxHeight = bbox.y1 - bbox.y0;
-
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
-
-                    ctx.fillStyle = color.replace('50%)', '50%, 0.1)').replace('hsl', 'hsla');
-                    ctx.fillRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
-
-                    // Draw multi-line label inside the bounding box
-                    const labelText = `F${line.fontSizeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
-
-                    const padding = 4;
-                    const availableWidth = boxWidth - padding * 2;
-                    const availableHeight = boxHeight - padding * 2;
-
-                    // Use font size based on box height, clamped to reasonable range
-                    const labelFontSize = Math.max(8, Math.min(14, Math.floor(boxHeight * 0.3)));
-                    ctx.font = `bold ${labelFontSize}px monospace`;
-                    const lineHeight = labelFontSize * 1.2;
-
-                    // Word-wrap text to fit available width
-                    const words = labelText.split(' ');
-                    const wrappedLines = [];
-                    let currentLine = '';
-
-                    for (const word of words) {
-                        const testLine = currentLine ? currentLine + ' ' + word : word;
-                        if (ctx.measureText(testLine).width <= availableWidth) {
-                            currentLine = testLine;
+                    // For the last pair, also add image below (cropped or full)
+                    if (i === uploadedImages.length - 2) {
+                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < imageBelow.height) {
+                            const cropped = cropImage(imageBelow, edgeCrop.cropBelowY, imageBelow.height);
+                            croppedParts.push(cropped);
                         } else {
-                            if (currentLine) {
-                                wrappedLines.push(currentLine);
-                            }
-                            // If single word is too wide, it goes on its own line (will be truncated later if needed)
-                            currentLine = word;
+                            croppedParts.push({
+                                dataUrl: imageBelow.src,
+                                width: imageBelow.width,
+                                height: imageBelow.height
+                            });
                         }
                     }
-                    if (currentLine) {
-                        wrappedLines.push(currentLine);
-                    }
-
-                    // Calculate how many lines fit
-                    const maxLines = Math.max(1, Math.floor(availableHeight / lineHeight));
-
-                    // If we have more lines than fit, truncate the last visible line with ellipsis
-                    const displayLines = wrappedLines.slice(0, maxLines);
-                    if (wrappedLines.length > maxLines ||
-                        (displayLines.length > 0 && ctx.measureText(displayLines[displayLines.length - 1]).width > availableWidth)) {
-                        // Truncate last line if needed
-                        let lastLine = displayLines[displayLines.length - 1] || '';
-                        // Add remaining content that didn't fit
-                        if (wrappedLines.length > maxLines) {
-                            lastLine = lastLine + ' ' + wrappedLines.slice(maxLines).join(' ');
-                        }
-                        // Truncate with ellipsis
-                        while (lastLine.length > 0 && ctx.measureText(lastLine + '...').width > availableWidth) {
-                            lastLine = lastLine.slice(0, -1);
-                        }
-                        displayLines[displayLines.length - 1] = lastLine + (lastLine.length < (wrappedLines.length > maxLines ? wrappedLines.slice(maxLines).join(' ').length + displayLines[displayLines.length - 1].length : displayLines[displayLines.length - 1].length) ? '...' : '');
-                    }
-
-                    // Calculate label background dimensions
-                    let maxLineWidth = 0;
-                    for (const dl of displayLines) {
-                        maxLineWidth = Math.max(maxLineWidth, ctx.measureText(dl).width);
-                    }
-                    const labelWidth = Math.min(maxLineWidth + padding * 2, boxWidth);
-                    const labelHeight = Math.min(displayLines.length * lineHeight + padding, boxHeight);
-
-                    // Position inside the bounding box (top-left with padding)
-                    const labelX = bbox.x0 + padding;
-                    const labelY = bbox.y0 + padding;
-
-                    // Draw background rectangle for label (inside the box)
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-                    ctx.fillRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
-
-                    // Draw text border for better visibility
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(labelX - padding / 2, labelY - padding / 2, labelWidth, labelHeight);
-
-                    // Draw the label text lines
-                    ctx.fillStyle = '#000';
-                    for (let li = 0; li < displayLines.length; li++) {
-                        ctx.fillText(displayLines[li], labelX, labelY + labelFontSize + li * lineHeight);
-                    }
                 }
-
-                // Draw match region from comparison with PREVIOUS image (this image as "below")
-                if (i > 0 && matches[i - 1] && matches[i - 1].length > 0) {
-                    const match = matches[i - 1];
-                    const firstLine = ocrResult.lines[match.startB];
-                    const lastLine = ocrResult.lines[match.startB + match.length - 1];
-
-                    const yStart = firstLine.bbox.y0;
-                    const yEnd = lastLine.bbox.y1;
-
-                    // Collect hashes for debug
-                    const matchHashes = [];
-                    for (let m = 0; m < match.length; m++) {
-                        matchHashes.push(ocrResult.lines[match.startB + m].hash);
-                    }
-
-                    // Draw full-width box in MAGENTA for "match with image above"
-                    ctx.strokeStyle = '#FF00FF';
-                    ctx.lineWidth = 6;
-                    ctx.strokeRect(0, yStart, img.width, yEnd - yStart);
-
-                    ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
-                    ctx.fillRect(0, yStart, img.width, yEnd - yStart);
-
-                    // Label with hashes
-                    ctx.font = 'bold 16px monospace';
-                    ctx.fillStyle = '#FF00FF';
-                    ctx.fillText(`MATCH WITH IMAGE ${i} (above) - ${match.length} lines, startB=${match.startB}`, 10, yStart - 30);
-                    ctx.fillText(`Hashes: ${matchHashes.join(', ')}`, 10, yStart - 10);
-                }
-
-                // Draw match region from comparison with NEXT image (this image as "above")
-                if (i < uploadedImages.length - 1 && matches[i] && matches[i].length > 0) {
-                    const match = matches[i];
-                    const firstLine = ocrResult.lines[match.startA];
-                    const lastLine = ocrResult.lines[match.startA + match.length - 1];
-
-                    const yStart = firstLine.bbox.y0;
-                    const yEnd = lastLine.bbox.y1;
-
-                    // Collect hashes for debug
-                    const matchHashes = [];
-                    for (let m = 0; m < match.length; m++) {
-                        matchHashes.push(ocrResult.lines[match.startA + m].hash);
-                    }
-
-                    // Draw full-width box in CYAN for "match with image below"
-                    ctx.strokeStyle = '#00FFFF';
-                    ctx.lineWidth = 6;
-                    ctx.strokeRect(0, yStart, img.width, yEnd - yStart);
-
-                    ctx.fillStyle = 'rgba(0, 255, 255, 0.15)';
-                    ctx.fillRect(0, yStart, img.width, yEnd - yStart);
-
-                    // Label with hashes
-                    ctx.font = 'bold 16px monospace';
-                    ctx.fillStyle = '#00FFFF';
-                    ctx.fillText(`MATCH WITH IMAGE ${i + 2} (below) - ${match.length} lines, startA=${match.startA}`, 10, yEnd + 20);
-                    ctx.fillText(`Hashes: ${matchHashes.join(', ')}`, 10, yEnd + 40);
-                }
-
-                // Draw image index label
-                ctx.font = 'bold 36px monospace';
-                ctx.fillStyle = 'white';
-                ctx.strokeStyle = 'black';
-                ctx.lineWidth = 4;
-                ctx.strokeText(`IMAGE ${i + 1}`, 20, 50);
-                ctx.fillText(`IMAGE ${i + 1}`, 20, 50);
-
-                annotatedImages.push({
-                    dataUrl: canvas.toDataURL('image/png'),
-                    width: canvas.width,
-                    height: canvas.height
-                });
             }
 
-            // Stack all images vertically without any cropping
-            return stitchImages(annotatedImages);
+            // If no parts were created (edge case), just use all images
+            if (croppedParts.length === 0) {
+                return uploadedImages.map(img => ({
+                    dataUrl: img.src,
+                    width: img.width,
+                    height: img.height
+                }));
+            }
+
+            // Stitch all cropped parts together
+            return stitchImages(croppedParts);
         }
 
         // Start OCR processing for new images
