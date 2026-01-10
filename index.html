@@ -654,6 +654,160 @@
                 padding: 20px;
             }
         }
+
+        /* View 4: Manual Crop Tweaking */
+        .view-4 {
+            flex-direction: column;
+            background: #9B59B6;
+            background-image:
+                radial-gradient(circle, #000 1.5px, transparent 1.5px);
+            background-size: 10px 10px;
+            background-position: 0 0;
+            max-height: 100dvh;
+            overflow: hidden;
+        }
+
+        .tweak-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px) + 16px);
+        }
+
+        .tweak-columns {
+            display: flex;
+            gap: 0;
+            position: relative;
+        }
+
+        .tweak-column {
+            flex: 1;
+            position: relative;
+        }
+
+        .tweak-image-wrapper {
+            position: relative;
+            width: 100%;
+            touch-action: none;
+            user-select: none;
+        }
+
+        .tweak-image-wrapper img {
+            width: 100%;
+            height: auto;
+            display: block;
+            pointer-events: none;
+        }
+
+        .tweak-image-wrapper .grayed-overlay {
+            position: absolute;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
+
+        .tweak-image-wrapper .kept-region {
+            position: absolute;
+            left: 0;
+            right: 0;
+            border: 3px solid #4ECDC4;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+
+        .tweak-crop-bar {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 6px;
+            background: #fff;
+            border: 3px solid #000;
+            z-index: 100;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+        }
+
+        .tweak-crop-bar .handle {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: #FFE66D;
+            border: 4px solid #000;
+            border-radius: 50%;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: ns-resize;
+            touch-action: none;
+            z-index: 101;
+            box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.3);
+            pointer-events: auto;
+        }
+
+        .tweak-crop-bar .handle:active {
+            background: #4ECDC4;
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .tweak-crop-bar .handle.left {
+            left: 8px;
+        }
+
+        .tweak-crop-bar .handle.right {
+            right: 8px;
+        }
+
+
+        .tweak-bottom-actions {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            padding: 16px;
+            padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+            border-top: 6px solid #000;
+            display: flex;
+            gap: 12px;
+            z-index: 200;
+        }
+
+        .tweak-cancel-btn {
+            flex: 0 0 auto;
+            padding: 16px 24px;
+            background: #fff;
+            color: #000;
+            border: 5px solid #000;
+            font-size: 16px;
+            font-weight: 900;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            clip-path: polygon(8% 0%, 100% 0%, 92% 100%, 0% 100%);
+        }
+
+        .tweak-cancel-btn:hover {
+            background: #FFE66D;
+        }
+
+        .tweak-apply-btn {
+            flex: 1;
+            padding: 16px;
+            background: #4ECDC4;
+            color: #000;
+            border: 5px solid #000;
+            font-size: 20px;
+            font-weight: 900;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            clip-path: polygon(5% 0%, 100% 0%, 95% 100%, 0% 100%);
+            text-shadow: 1px 1px 0px #fff;
+        }
+
+        .tweak-apply-btn:hover {
+            background: #FFE66D;
+        }
     </style>
 </head>
 <body>
@@ -714,6 +868,19 @@
         </div>
     </div>
 
+    <div class="view view-4">
+        <div class="tweak-container" id="tweakContainer">
+            <div class="tweak-columns" id="tweakColumns">
+                <div class="tweak-column left" id="tweakColumnLeft"></div>
+                <div class="tweak-column right" id="tweakColumnRight"></div>
+            </div>
+        </div>
+        <div class="tweak-bottom-actions">
+            <button class="tweak-cancel-btn" id="tweakCancelBtn">Cancel</button>
+            <button class="tweak-apply-btn" id="tweakApplyBtn">Apply</button>
+        </div>
+    </div>
+
     <script>
         const fileInput = document.getElementById('fileInput');
         const uploadBtnMain = document.getElementById('uploadBtnMain');
@@ -726,6 +893,10 @@
         let currentView = 1;
         let moveMode = false;
         let movingIndex = null;
+
+        // Crop regions data for manual tweaking (populated by stitching)
+        // Each entry: { imageIndex, cropStartY, cropEndY, isEdgeBased }
+        let cropRegions = [];
 
         // OCR cache: maps image id to OCR promise (not result)
         // This ensures we never start duplicate OCR tasks
@@ -1384,10 +1555,33 @@
         }
 
         // Main stitching algorithm
-        async function stitchScreenshots() {
+        // If useCropRegions is true, uses the global cropRegions array instead of detecting
+        async function stitchScreenshots(useCropRegions = false) {
             if (uploadedImages.length === 0) return null;
             if (uploadedImages.length === 1) {
+                cropRegions = [{
+                    imageIndex: 0,
+                    cropStartY: 0,
+                    cropEndY: uploadedImages[0].height,
+                    isEdgeBased: false
+                }];
                 return uploadedImages[0].src;
+            }
+
+            if (useCropRegions && cropRegions.length === uploadedImages.length) {
+                // Use existing crop regions for stitching
+                const croppedParts = [];
+                for (const region of cropRegions) {
+                    const img = uploadedImages[region.imageIndex];
+                    if (region.cropEndY > region.cropStartY) {
+                        const cropped = cropImage(img, region.cropStartY, region.cropEndY);
+                        croppedParts.push(cropped);
+                    }
+                }
+                if (croppedParts.length === 0) {
+                    return uploadedImages[0].src;
+                }
+                return stitchImages(croppedParts);
             }
 
             // Run OCR on all images
@@ -1401,6 +1595,8 @@
             // Track start offset for each image (where to start cropping from)
             // For image 0, start is 0. For subsequent images, start is where overlap began.
             let imageStartOffsets = new Array(uploadedImages.length).fill(0);
+            let imageEndOffsets = uploadedImages.map(img => img.height);
+            let isEdgeBased = new Array(uploadedImages.length).fill(false);
 
             for (let i = 0; i < uploadedImages.length - 1; i++) {
                 const imageAbove = uploadedImages[i];
@@ -1422,19 +1618,13 @@
                     avgLineHeight * 0.5
                 );
 
-                const cropYStart = imageStartOffsets[i];
-
                 if (match && match.length > 0) {
                     // Found matching region
                     const matchedLineAbove = ocrAbove.lines[match.startA];
                     const matchedLineBelow = ocrBelow.lines[match.startB];
 
-                    // Crop image above: from its start offset to top of matched region (exclusive)
-                    const cropYEnd = matchedLineAbove.y;
-                    if (cropYEnd > cropYStart) {
-                        const cropped = cropImage(imageAbove, cropYStart, cropYEnd);
-                        croppedParts.push(cropped);
-                    }
+                    // Set end offset for upper image
+                    imageEndOffsets[i] = matchedLineAbove.y;
 
                     // Set start offset for lower image (inclusive of overlap start)
                     imageStartOffsets[i + 1] = matchedLineBelow.y;
@@ -1442,32 +1632,35 @@
                     // No match found - try horizontal edge detection as fallback
                     const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
 
-                    // Crop image above: from start offset to edge, or full remaining portion
-                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > cropYStart) {
-                        const cropped = cropImage(imageAbove, cropYStart, edgeCrop.cropAboveY);
-                        croppedParts.push(cropped);
-                    } else {
-                        // No edge found, use full remaining portion of upper image
-                        const cropped = cropImage(imageAbove, cropYStart, imageAbove.height);
-                        croppedParts.push(cropped);
+                    if (edgeCrop.cropAboveY !== null) {
+                        imageEndOffsets[i] = edgeCrop.cropAboveY;
+                        isEdgeBased[i] = true;
                     }
 
-                    // Set start offset for lower image
                     if (edgeCrop.cropBelowY !== null) {
                         imageStartOffsets[i + 1] = edgeCrop.cropBelowY;
-                    } else {
-                        imageStartOffsets[i + 1] = 0;
+                        isEdgeBased[i + 1] = true;
                     }
                 }
             }
 
-            // Add the final image (from its start offset to end)
-            const lastIdx = uploadedImages.length - 1;
-            const lastImage = uploadedImages[lastIdx];
-            const lastStartOffset = imageStartOffsets[lastIdx];
-            if (lastStartOffset < lastImage.height) {
-                const cropped = cropImage(lastImage, lastStartOffset, lastImage.height);
-                croppedParts.push(cropped);
+            // Build cropRegions and croppedParts
+            cropRegions = [];
+            for (let i = 0; i < uploadedImages.length; i++) {
+                const cropYStart = imageStartOffsets[i];
+                const cropYEnd = imageEndOffsets[i];
+
+                cropRegions.push({
+                    imageIndex: i,
+                    cropStartY: cropYStart,
+                    cropEndY: cropYEnd,
+                    isEdgeBased: isEdgeBased[i]
+                });
+
+                if (cropYEnd > cropYStart) {
+                    const cropped = cropImage(uploadedImages[i], cropYStart, cropYEnd);
+                    croppedParts.push(cropped);
+                }
             }
 
             // If no parts were created (edge case), just use all images
@@ -1902,7 +2095,7 @@
                 resultContainer.innerHTML = `
                     <img src="${stitchedImageUrl}" class="result-image" id="resultImage" alt="Stitched Screenshot">
                     <div class="result-actions">
-                        <button class="edit-btn" onclick="showView(2)">
+                        <button class="edit-btn" onclick="enterTweakMode()">
                             Edit
                         </button>
                     </div>
@@ -1925,7 +2118,7 @@
                 resultContainer.innerHTML = `
                     ${imagesHtml}
                     <div class="result-actions">
-                        <button class="edit-btn" onclick="showView(2)">
+                        <button class="edit-btn" onclick="enterTweakMode()">
                             Edit
                         </button>
                     </div>
@@ -2112,6 +2305,285 @@
             uploadedImages = [];
             ocrPromiseCache.clear();
             showView(1);
+        }
+
+        // =====================================================
+        // View 4: Manual Crop Tweaking
+        // =====================================================
+
+        // Store backup of crop regions when entering tweak mode
+        let cropRegionsBackup = [];
+        // Track rendered image wrappers for positioning
+        let tweakImageWrappers = [];
+
+        function enterTweakMode() {
+            // Backup current crop regions
+            cropRegionsBackup = cropRegions.map(r => ({ ...r }));
+            renderTweakView();
+            showView(4);
+        }
+
+        function renderTweakView() {
+            const leftColumn = document.getElementById('tweakColumnLeft');
+            const rightColumn = document.getElementById('tweakColumnRight');
+            const columnsContainer = document.getElementById('tweakColumns');
+
+            leftColumn.innerHTML = '';
+            rightColumn.innerHTML = '';
+            tweakImageWrappers = [];
+
+            // Remove any existing crop bars from the columns container
+            columnsContainer.querySelectorAll('.tweak-crop-bar').forEach(bar => bar.remove());
+
+            if (uploadedImages.length === 0 || cropRegions.length === 0) return;
+
+            // Calculate scale factor based on column width (each column is 50% of container)
+            const containerWidth = columnsContainer.offsetWidth || window.innerWidth;
+            const columnWidth = containerWidth / 2;
+            const scale = columnWidth / uploadedImages[0].width;
+
+            // Track cumulative Y offset for positioning
+            let cumulativeY = 0;
+
+            // First pass: calculate positions and store bar Y coordinates
+            const barPositions = []; // { y, imageIndex }
+
+            for (let i = 0; i < uploadedImages.length; i++) {
+                const img = uploadedImages[i];
+                const region = cropRegions[i];
+                const isLeftColumn = i % 2 === 0;
+                const column = isLeftColumn ? leftColumn : rightColumn;
+
+                // Calculate the kept region height in display pixels
+                const keptHeight = (region.cropEndY - region.cropStartY) * scale;
+
+                // Create image wrapper
+                const wrapper = document.createElement('div');
+                wrapper.className = 'tweak-image-wrapper';
+                wrapper.dataset.imageIndex = i;
+
+                const imgDisplayHeight = img.height * scale;
+                const cropStartDisplay = region.cropStartY * scale;
+                const cropEndDisplay = region.cropEndY * scale;
+
+                // Add the actual image
+                const imgEl = document.createElement('img');
+                imgEl.src = img.src;
+                imgEl.draggable = false;
+                wrapper.appendChild(imgEl);
+
+                // Add grayed overlay for the TOP deleted region (above cropStartY)
+                if (region.cropStartY > 0) {
+                    const topOverlay = document.createElement('div');
+                    topOverlay.className = 'grayed-overlay';
+                    topOverlay.style.top = '0';
+                    topOverlay.style.height = cropStartDisplay + 'px';
+                    wrapper.appendChild(topOverlay);
+                }
+
+                // Add grayed overlay for the BOTTOM deleted region (below cropEndY)
+                if (region.cropEndY < img.height) {
+                    const bottomOverlay = document.createElement('div');
+                    bottomOverlay.className = 'grayed-overlay';
+                    bottomOverlay.style.bottom = '0';
+                    bottomOverlay.style.height = (imgDisplayHeight - cropEndDisplay) + 'px';
+                    wrapper.appendChild(bottomOverlay);
+                }
+
+                // Position the wrapper
+                // The cropStartY of this image should align with the cumulative Y position
+                const topOffset = cumulativeY - cropStartDisplay;
+                wrapper.style.marginTop = topOffset + 'px';
+
+                // Setup image body drag for adjusting cropStartY (only for images after first)
+                if (i > 0) {
+                    setupImageDrag(wrapper, i, scale);
+                }
+
+                column.appendChild(wrapper);
+                tweakImageWrappers.push({ wrapper, imageIndex: i, scale, topOffset });
+
+                // Record bar position (at the end of this image's kept region)
+                if (i < uploadedImages.length - 1) {
+                    barPositions.push({
+                        y: cumulativeY + keptHeight,
+                        imageIndex: i,
+                        isLeftColumn: isLeftColumn
+                    });
+                }
+
+                // Update cumulative Y for next image
+                cumulativeY += keptHeight;
+            }
+
+            // Second pass: create crop bars in the columns container
+            for (const barPos of barPositions) {
+                const cropBar = document.createElement('div');
+                cropBar.className = 'tweak-crop-bar';
+                cropBar.style.top = (barPos.y - 3) + 'px'; // -3 for half height of bar
+
+                const handle = document.createElement('div');
+                handle.className = 'handle ' + (barPos.isLeftColumn ? 'left' : 'right');
+                handle.dataset.imageIndex = barPos.imageIndex;
+                cropBar.appendChild(handle);
+
+                columnsContainer.appendChild(cropBar);
+
+                // Setup handle drag
+                setupHandleDrag(handle, barPos.imageIndex, scale);
+            }
+        }
+
+        function setupHandleDrag(handle, imageIndex, scale) {
+            let isDragging = false;
+            let startY = 0;
+            let startCropEndY = 0;
+
+            handle.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isDragging = true;
+                startY = e.clientY;
+                startCropEndY = cropRegions[imageIndex].cropEndY;
+                handle.setPointerCapture(e.pointerId);
+            });
+
+            handle.addEventListener('pointermove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+
+                const deltaY = (e.clientY - startY) / scale;
+                let newCropEndY = startCropEndY + deltaY;
+
+                // Clamp to valid range
+                const img = uploadedImages[imageIndex];
+                const minEnd = cropRegions[imageIndex].cropStartY + 10; // At least 10px kept
+                const maxEnd = img.height;
+                newCropEndY = Math.max(minEnd, Math.min(maxEnd, newCropEndY));
+
+                cropRegions[imageIndex].cropEndY = Math.round(newCropEndY);
+                renderTweakView();
+            });
+
+            handle.addEventListener('pointerup', (e) => {
+                isDragging = false;
+                handle.releasePointerCapture(e.pointerId);
+            });
+
+            handle.addEventListener('pointercancel', () => {
+                isDragging = false;
+            });
+        }
+
+        function setupImageDrag(wrapper, imageIndex, scale) {
+            let isDragging = false;
+            let startY = 0;
+            let startCropStartY = 0;
+
+            wrapper.addEventListener('pointerdown', (e) => {
+                // Don't start drag if clicking on a handle
+                if (e.target.classList.contains('handle')) return;
+
+                e.preventDefault();
+                isDragging = true;
+                startY = e.clientY;
+                startCropStartY = cropRegions[imageIndex].cropStartY;
+                wrapper.setPointerCapture(e.pointerId);
+            });
+
+            wrapper.addEventListener('pointermove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+
+                // Moving image DOWN (positive deltaY) means revealing more (smaller cropStartY)
+                // Moving image UP (negative deltaY) means cropping more (larger cropStartY)
+                const deltaY = (e.clientY - startY) / scale;
+                let newCropStartY = startCropStartY - deltaY;
+
+                // Clamp to valid range
+                const img = uploadedImages[imageIndex];
+                const minStart = 0;
+                const maxStart = cropRegions[imageIndex].cropEndY - 10; // At least 10px kept
+                newCropStartY = Math.max(minStart, Math.min(maxStart, newCropStartY));
+
+                cropRegions[imageIndex].cropStartY = Math.round(newCropStartY);
+                renderTweakView();
+            });
+
+            wrapper.addEventListener('pointerup', (e) => {
+                isDragging = false;
+                wrapper.releasePointerCapture(e.pointerId);
+            });
+
+            wrapper.addEventListener('pointercancel', () => {
+                isDragging = false;
+            });
+        }
+
+        // Setup cancel button
+        document.getElementById('tweakCancelBtn').addEventListener('click', () => {
+            // Restore backup
+            cropRegions = cropRegionsBackup.map(r => ({ ...r }));
+            showView(3);
+        });
+
+        // Setup apply button
+        document.getElementById('tweakApplyBtn').addEventListener('click', async () => {
+            // Re-stitch with updated crop regions
+            const applyBtn = document.getElementById('tweakApplyBtn');
+            applyBtn.disabled = true;
+            applyBtn.textContent = 'Applying...';
+
+            try {
+                await displayResultWithCropRegions();
+                showView(3);
+            } finally {
+                applyBtn.disabled = false;
+                applyBtn.textContent = 'Apply';
+            }
+        });
+
+        // Re-stitch using current crop regions
+        async function displayResultWithCropRegions() {
+            try {
+                const stitchedImageUrl = await stitchScreenshots(true);
+
+                const img = new Image();
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = stitchedImageUrl;
+                });
+
+                originalStitchedImage = img;
+                originalStitchedWidth = img.width;
+                originalStitchedHeight = img.height;
+
+                const effectiveMinHeight = minUploadedImageHeight * 0.75;
+                const maxColumns = Math.ceil(originalStitchedHeight / effectiveMinHeight);
+                columnSliderThreshold = 100 / maxColumns;
+
+                currentColumnCount = 1;
+
+                resultContainer.innerHTML = `
+                    <img src="${stitchedImageUrl}" class="result-image" id="resultImage" alt="Stitched Screenshot">
+                    <div class="result-actions">
+                        <button class="edit-btn" onclick="enterTweakMode()">
+                            Edit
+                        </button>
+                    </div>
+                    <div class="column-slider-container">
+                        <div class="column-slider-track" id="columnSliderTrack">
+                            <div class="column-slider-fill" id="columnSliderFill"></div>
+                            <div class="column-slider-thumb" id="columnSliderThumb"></div>
+                        </div>
+                    </div>
+                `;
+
+                setupColumnSlider();
+            } catch (error) {
+                console.error('Stitching error:', error);
+            }
         }
     </script>
 </body>
