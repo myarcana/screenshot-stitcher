@@ -968,7 +968,10 @@
                         len++;
                     }
 
-                    if (!best || len > best.length) {
+                    // Prefer longer matches, but for equal length, prefer matches
+                    // where A's position is LOWER (larger y) since overlaps should
+                    // be at the bottom of the upper image
+                    if (!best || len > best.length || (len === best.length && i > best.startA)) {
                         best = { startA: i, startB: j, length: len };
                     }
                 }
@@ -1232,7 +1235,7 @@
             });
         }
 
-        // Main stitching algorithm
+        // Main stitching algorithm - DEBUG MODE: no cropping, just visualize matches
         async function stitchScreenshots() {
             if (uploadedImages.length === 0) return null;
 
@@ -1241,122 +1244,143 @@
                 uploadedImages.map(img => runOCR(img))
             );
 
-            // Create debug images with bounding boxes drawn
-            const debugImages = await Promise.all(
-                uploadedImages.map((img, i) => createDebugImage(img, ocrResults[i]))
-            );
-
-            if (uploadedImages.length === 1) {
-                return debugImages[0].src;
-            }
-
-            // Process images in pairs
-            const croppedParts = [];
-
-            // Track where each image should be cropped from.
-            // For the first image, start at 0. For intermediate images, start at the
-            // previous match point (where the overlap with the previous image ends).
-            let nextCropStart = 0;
-
+            // Find all matches between consecutive pairs first
+            const matches = [];
             for (let i = 0; i < uploadedImages.length - 1; i++) {
-                // Use original images for OCR coordinate lookup
-                const imageAbove = uploadedImages[i];
-                const imageBelow = uploadedImages[i + 1];
-                // Use debug images (with bounding boxes) for actual cropping/stitching
-                const debugAbove = debugImages[i];
-                const debugBelow = debugImages[i + 1];
                 const ocrAbove = ocrResults[i];
                 const ocrBelow = ocrResults[i + 1];
 
-                // Calculate average line height for y-diff threshold
-                let avgLineHeight = 30; // Default fallback
+                let avgLineHeight = 30;
                 if (ocrAbove.lines.length > 0) {
                     const heights = ocrAbove.lines.map(l => l.bbox.y1 - l.bbox.y0);
                     avgLineHeight = heights.reduce((a, b) => a + b, 0) / heights.length;
                 }
 
-                // Find longest common substring with y-diff constraint
-                // B's y must be <= A's y - minYDiff (overlap in B must be higher than in A)
                 const match = findLongestCommonSubstring(
                     ocrAbove.lines,
                     ocrBelow.lines,
-                    avgLineHeight * 0.5 // Min y-diff is 50% of line height
+                    avgLineHeight * 0.5
                 );
 
-                if (match && match.length > 0) {
-                    // Get the y position of the matching region in image above
-                    const matchedLineAbove = ocrAbove.lines[match.startA];
-                    const matchedLineBelow = ocrBelow.lines[match.startB];
+                matches.push(match);
+            }
 
-                    // Crop debug image above: from nextCropStart to top of matched region
-                    const cropYStart = nextCropStart;
-                    const cropYEnd = matchedLineAbove.y;
-                    if (cropYEnd > cropYStart) {
-                        const cropped = cropImage(debugAbove, cropYStart, cropYEnd);
-                        croppedParts.push(cropped);
-                    }
+            // Create debug images with OCR boxes AND match region highlights
+            const annotatedImages = [];
+            for (let i = 0; i < uploadedImages.length; i++) {
+                const img = uploadedImages[i];
+                const ocrResult = ocrResults[i];
 
-                    // Update nextCropStart for the next image.
-                    // The next image (imageBelow) will become imageAbove in the next iteration,
-                    // and it should be cropped starting from where this match appears in it.
-                    nextCropStart = matchedLineBelow.y;
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
 
-                    // For the last pair, also add the bottom part of debug image below
-                    if (i === uploadedImages.length - 2) {
-                        // Crop debug image below: from top of matched region to bottom
-                        const cropped = cropImage(debugBelow, nextCropStart, debugBelow.height);
-                        croppedParts.push(cropped);
-                    }
-                } else {
-                    // No match found - try horizontal edge detection as fallback
-                    // Use original images for edge detection (more accurate without annotations)
-                    const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
+                // Draw the original image
+                ctx.drawImage(img.img, 0, 0);
 
-                    // Crop debug image above: use edge if found, otherwise from nextCropStart to bottom
-                    const cropYStart = nextCropStart;
-                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > cropYStart) {
-                        const cropped = cropImage(debugAbove, cropYStart, edgeCrop.cropAboveY);
-                        croppedParts.push(cropped);
-                    } else if (cropYStart < debugAbove.height) {
-                        // No edge found, include from nextCropStart to bottom
-                        const cropped = cropImage(debugAbove, cropYStart, debugAbove.height);
-                        croppedParts.push(cropped);
-                    }
+                // Draw OCR bounding boxes (existing debug visualization)
+                for (const line of ocrResult.lines) {
+                    const color = hashToColor(line.hash);
+                    const bbox = line.bbox;
 
-                    // Update nextCropStart for the next image
-                    if (edgeCrop.cropBelowY !== null) {
-                        nextCropStart = edgeCrop.cropBelowY;
-                    } else {
-                        nextCropStart = 0; // No edge found, start from top
-                    }
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
 
-                    // For the last pair, also add debug image below (cropped or full)
-                    if (i === uploadedImages.length - 2) {
-                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < debugBelow.height) {
-                            const cropped = cropImage(debugBelow, edgeCrop.cropBelowY, debugBelow.height);
-                            croppedParts.push(cropped);
-                        } else {
-                            croppedParts.push({
-                                dataUrl: debugBelow.src,
-                                width: debugBelow.width,
-                                height: debugBelow.height
-                            });
-                        }
-                    }
+                    ctx.fillStyle = color.replace('50%)', '50%, 0.1)').replace('hsl', 'hsla');
+                    ctx.fillRect(bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0);
+
+                    // Draw hash and text label above the bounding box
+                    const fontSize = Math.max(10, Math.min(14, (bbox.y1 - bbox.y0) * 0.4));
+                    ctx.font = `bold ${fontSize}px monospace`;
+
+                    const hashText = `#${line.hash}`;
+                    const displayText = line.text.length > 40 ? line.text.substring(0, 37) + '...' : line.text;
+                    const labelText = `${hashText}: ${displayText}`;
+
+                    const textMetrics = ctx.measureText(labelText);
+                    const textHeight = fontSize + 4;
+                    const textY = bbox.y0 - 4;
+                    const textX = bbox.x0;
+
+                    // Draw background rectangle for label
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+                    ctx.fillRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+
+                    // Draw text border for better visibility
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(textX - 2, textY - textHeight, textMetrics.width + 4, textHeight + 2);
+
+                    // Draw the label text
+                    ctx.fillStyle = '#000';
+                    ctx.fillText(labelText, textX, textY - 2);
                 }
+
+                // Draw match region from comparison with PREVIOUS image (this image as "below")
+                if (i > 0 && matches[i - 1] && matches[i - 1].length > 0) {
+                    const match = matches[i - 1];
+                    const firstLine = ocrResult.lines[match.startB];
+                    const lastLine = ocrResult.lines[match.startB + match.length - 1];
+
+                    const yStart = firstLine.bbox.y0;
+                    const yEnd = lastLine.bbox.y1;
+
+                    // Draw full-width box in MAGENTA for "match with image above"
+                    ctx.strokeStyle = '#FF00FF';
+                    ctx.lineWidth = 6;
+                    ctx.strokeRect(0, yStart, img.width, yEnd - yStart);
+
+                    ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
+                    ctx.fillRect(0, yStart, img.width, yEnd - yStart);
+
+                    // Label
+                    ctx.font = 'bold 20px monospace';
+                    ctx.fillStyle = '#FF00FF';
+                    ctx.fillText(`MATCH WITH IMAGE ${i} (above) - ${match.length} lines`, 10, yStart - 10);
+                }
+
+                // Draw match region from comparison with NEXT image (this image as "above")
+                if (i < uploadedImages.length - 1 && matches[i] && matches[i].length > 0) {
+                    const match = matches[i];
+                    const firstLine = ocrResult.lines[match.startA];
+                    const lastLine = ocrResult.lines[match.startA + match.length - 1];
+
+                    const yStart = firstLine.bbox.y0;
+                    const yEnd = lastLine.bbox.y1;
+
+                    // Draw full-width box in CYAN for "match with image below"
+                    ctx.strokeStyle = '#00FFFF';
+                    ctx.lineWidth = 6;
+                    ctx.strokeRect(0, yStart, img.width, yEnd - yStart);
+
+                    ctx.fillStyle = 'rgba(0, 255, 255, 0.15)';
+                    ctx.fillRect(0, yStart, img.width, yEnd - yStart);
+
+                    // Label
+                    ctx.font = 'bold 20px monospace';
+                    ctx.fillStyle = '#00FFFF';
+                    ctx.fillText(`MATCH WITH IMAGE ${i + 2} (below) - ${match.length} lines`, 10, yEnd + 25);
+                }
+
+                // Draw image index label
+                ctx.font = 'bold 36px monospace';
+                ctx.fillStyle = 'white';
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 4;
+                ctx.strokeText(`IMAGE ${i + 1}`, 20, 50);
+                ctx.fillText(`IMAGE ${i + 1}`, 20, 50);
+
+                annotatedImages.push({
+                    dataUrl: canvas.toDataURL('image/png'),
+                    width: canvas.width,
+                    height: canvas.height
+                });
             }
 
-            // If no parts were created (edge case), just use all debug images
-            if (croppedParts.length === 0) {
-                return debugImages.map(img => ({
-                    dataUrl: img.src,
-                    width: img.width,
-                    height: img.height
-                }));
-            }
-
-            // Stitch all cropped parts together
-            return stitchImages(croppedParts);
+            // Stack all images vertically without any cropping
+            return stitchImages(annotatedImages);
         }
 
         // Start OCR processing for new images
