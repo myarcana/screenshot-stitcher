@@ -1398,6 +1398,10 @@
             // Process images in pairs
             const croppedParts = [];
 
+            // Track start offset for each image (where to start cropping from)
+            // For image 0, start is 0. For subsequent images, start is where overlap began.
+            let imageStartOffsets = new Array(uploadedImages.length).fill(0);
+
             for (let i = 0; i < uploadedImages.length - 1; i++) {
                 const imageAbove = uploadedImages[i];
                 const imageBelow = uploadedImages[i + 1];
@@ -1418,55 +1422,52 @@
                     avgLineHeight * 0.5
                 );
 
+                const cropYStart = imageStartOffsets[i];
+
                 if (match && match.length > 0) {
                     // Found matching region
                     const matchedLineAbove = ocrAbove.lines[match.startA];
                     const matchedLineBelow = ocrBelow.lines[match.startB];
 
-                    // Crop image above: from y=0 to top of matched region
+                    // Crop image above: from its start offset to top of matched region (exclusive)
                     const cropYEnd = matchedLineAbove.y;
-                    if (cropYEnd > 0) {
-                        const cropped = cropImage(imageAbove, 0, cropYEnd);
+                    if (cropYEnd > cropYStart) {
+                        const cropped = cropImage(imageAbove, cropYStart, cropYEnd);
                         croppedParts.push(cropped);
                     }
 
-                    // For the last pair, also add the bottom part of image below
-                    if (i === uploadedImages.length - 2) {
-                        // Crop image below: from top of matched region to bottom
-                        const cropYStart = matchedLineBelow.y;
-                        const cropped = cropImage(imageBelow, cropYStart, imageBelow.height);
-                        croppedParts.push(cropped);
-                    }
+                    // Set start offset for lower image (inclusive of overlap start)
+                    imageStartOffsets[i + 1] = matchedLineBelow.y;
                 } else {
                     // No match found - try horizontal edge detection as fallback
                     const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
 
-                    // Crop image above: use edge if found, otherwise full image
-                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > 0) {
-                        const cropped = cropImage(imageAbove, 0, edgeCrop.cropAboveY);
+                    // Crop image above: from start offset to edge, or full remaining portion
+                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > cropYStart) {
+                        const cropped = cropImage(imageAbove, cropYStart, edgeCrop.cropAboveY);
                         croppedParts.push(cropped);
                     } else {
-                        croppedParts.push({
-                            dataUrl: imageAbove.src,
-                            width: imageAbove.width,
-                            height: imageAbove.height
-                        });
+                        // No edge found, use full remaining portion of upper image
+                        const cropped = cropImage(imageAbove, cropYStart, imageAbove.height);
+                        croppedParts.push(cropped);
                     }
 
-                    // For the last pair, also add image below (cropped or full)
-                    if (i === uploadedImages.length - 2) {
-                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < imageBelow.height) {
-                            const cropped = cropImage(imageBelow, edgeCrop.cropBelowY, imageBelow.height);
-                            croppedParts.push(cropped);
-                        } else {
-                            croppedParts.push({
-                                dataUrl: imageBelow.src,
-                                width: imageBelow.width,
-                                height: imageBelow.height
-                            });
-                        }
+                    // Set start offset for lower image
+                    if (edgeCrop.cropBelowY !== null) {
+                        imageStartOffsets[i + 1] = edgeCrop.cropBelowY;
+                    } else {
+                        imageStartOffsets[i + 1] = 0;
                     }
                 }
+            }
+
+            // Add the final image (from its start offset to end)
+            const lastIdx = uploadedImages.length - 1;
+            const lastImage = uploadedImages[lastIdx];
+            const lastStartOffset = imageStartOffsets[lastIdx];
+            if (lastStartOffset < lastImage.height) {
+                const cropped = cropImage(lastImage, lastStartOffset, lastImage.height);
+                croppedParts.push(cropped);
             }
 
             // If no parts were created (edge case), just use all images
