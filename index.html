@@ -1253,6 +1253,11 @@
             // Process images in pairs
             const croppedParts = [];
 
+            // Track where each image should be cropped from.
+            // For the first image, start at 0. For intermediate images, start at the
+            // previous match point (where the overlap with the previous image ends).
+            let nextCropStart = 0;
+
             for (let i = 0; i < uploadedImages.length - 1; i++) {
                 // Use original images for OCR coordinate lookup
                 const imageAbove = uploadedImages[i];
@@ -1283,18 +1288,23 @@
                     const matchedLineAbove = ocrAbove.lines[match.startA];
                     const matchedLineBelow = ocrBelow.lines[match.startB];
 
-                    // Crop debug image above: from y=0 to top of matched region
+                    // Crop debug image above: from nextCropStart to top of matched region
+                    const cropYStart = nextCropStart;
                     const cropYEnd = matchedLineAbove.y;
-                    if (cropYEnd > 0) {
-                        const cropped = cropImage(debugAbove, 0, cropYEnd);
+                    if (cropYEnd > cropYStart) {
+                        const cropped = cropImage(debugAbove, cropYStart, cropYEnd);
                         croppedParts.push(cropped);
                     }
+
+                    // Update nextCropStart for the next image.
+                    // The next image (imageBelow) will become imageAbove in the next iteration,
+                    // and it should be cropped starting from where this match appears in it.
+                    nextCropStart = matchedLineBelow.y;
 
                     // For the last pair, also add the bottom part of debug image below
                     if (i === uploadedImages.length - 2) {
                         // Crop debug image below: from top of matched region to bottom
-                        const cropYStart = matchedLineBelow.y;
-                        const cropped = cropImage(debugBelow, cropYStart, debugBelow.height);
+                        const cropped = cropImage(debugBelow, nextCropStart, debugBelow.height);
                         croppedParts.push(cropped);
                     }
                 } else {
@@ -1302,21 +1312,27 @@
                     // Use original images for edge detection (more accurate without annotations)
                     const edgeCrop = findEdgeCropPoints(imageAbove, imageBelow);
 
-                    // Crop debug image above: use edge if found, otherwise full image
-                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > 0) {
-                        const cropped = cropImage(debugAbove, 0, edgeCrop.cropAboveY);
+                    // Crop debug image above: use edge if found, otherwise from nextCropStart to bottom
+                    const cropYStart = nextCropStart;
+                    if (edgeCrop.cropAboveY !== null && edgeCrop.cropAboveY > cropYStart) {
+                        const cropped = cropImage(debugAbove, cropYStart, edgeCrop.cropAboveY);
                         croppedParts.push(cropped);
+                    } else if (cropYStart < debugAbove.height) {
+                        // No edge found, include from nextCropStart to bottom
+                        const cropped = cropImage(debugAbove, cropYStart, debugAbove.height);
+                        croppedParts.push(cropped);
+                    }
+
+                    // Update nextCropStart for the next image
+                    if (edgeCrop.cropBelowY !== null) {
+                        nextCropStart = edgeCrop.cropBelowY;
                     } else {
-                        croppedParts.push({
-                            dataUrl: debugAbove.src,
-                            width: debugAbove.width,
-                            height: debugAbove.height
-                        });
+                        nextCropStart = 0; // No edge found, start from top
                     }
 
                     // For the last pair, also add debug image below (cropped or full)
                     if (i === uploadedImages.length - 2) {
-                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < imageBelow.height) {
+                        if (edgeCrop.cropBelowY !== null && edgeCrop.cropBelowY < debugBelow.height) {
                             const cropped = cropImage(debugBelow, edgeCrop.cropBelowY, debugBelow.height);
                             croppedParts.push(cropped);
                         } else {
