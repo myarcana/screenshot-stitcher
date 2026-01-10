@@ -790,9 +790,7 @@
                                 ...line,
                                 text: normalizedText,
                                 hash: hashString(normalizedText),
-                                fontSize: fontSize,
-                                leftEdge: line.bbox.x0,
-                                rightEdge: line.bbox.x1
+                                fontSize: fontSize
                             };
                         })
                         .filter(line => line.text.length > 0);  // Remove entries with empty text
@@ -804,34 +802,16 @@
                         2
                     );
 
-                    // Apply greedy interval grouping for left edges (7px intervals)
-                    const leftEdgeGrouping = createGroupMapping(
-                        hashedLines,
-                        line => line.leftEdge,
-                        7
-                    );
-
-                    // Apply greedy interval grouping for right edges (7px intervals)
-                    const rightEdgeGrouping = createGroupMapping(
-                        hashedLines,
-                        line => line.rightEdge,
-                        7
-                    );
-
                     // Add group IDs to each line
                     for (const line of hashedLines) {
                         line.fontSizeGroup = fontSizeGrouping.mapping.get(line);
-                        line.leftEdgeGroup = leftEdgeGrouping.mapping.get(line);
-                        line.rightEdgeGroup = rightEdgeGrouping.mapping.get(line);
                     }
 
                     return {
                         lines: hashedLines,
                         imageWidth: imageData.width,
                         imageHeight: imageData.height,
-                        fontSizeGroups: fontSizeGrouping.groups,
-                        leftEdgeGroups: leftEdgeGrouping.groups,
-                        rightEdgeGroups: rightEdgeGrouping.groups
+                        fontSizeGroups: fontSizeGrouping.groups
                     };
                 } catch (error) {
                     console.error('OCR error:', error);
@@ -970,8 +950,7 @@
                 ctx.fillRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
                 // Draw multi-line label inside the bounding box
-                // Order: font group, left group, right group, confidence, hash, text
-                const labelText = `F${line.fontSizeGroup} L${line.leftEdgeGroup} R${line.rightEdgeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
+                const labelText = `F${line.fontSizeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
 
                 const padding = 4;
                 const availableWidth = boxWidth - padding * 2;
@@ -1463,8 +1442,7 @@
                     ctx.fillRect(bbox.x0, bbox.y0, boxWidth, boxHeight);
 
                     // Draw multi-line label inside the bounding box
-                    // Order: font group, left group, right group, confidence, hash, text
-                    const labelText = `F${line.fontSizeGroup} L${line.leftEdgeGroup} R${line.rightEdgeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
+                    const labelText = `F${line.fontSizeGroup} [${Math.round(line.confidence)}%] #${line.hash} ${line.text}`;
 
                     const padding = 4;
                     const availableWidth = boxWidth - padding * 2;
