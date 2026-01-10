@@ -1557,6 +1557,7 @@
                             height: img.height
                         };
                         uploadedImages.push(imageData);
+                        updateMinUploadedImageHeight();
                         newImages.push(imageData);
                         loadedCount++;
 
@@ -1625,6 +1626,7 @@
             }
 
             uploadedImages.splice(index, 1);
+            updateMinUploadedImageHeight();
 
             if (moveMode) {
                 exitMoveMode();
@@ -1859,6 +1861,17 @@
         let originalStitchedHeight = 0;
         let columnSliderThreshold = 100; // Percentage for 1 column step
         let currentColumnCount = 1;
+        let minUploadedImageHeight = 0; // Cached min height of uploaded images
+        let columnsCanvas = null; // Reusable canvas for column rendering
+        let pendingPngTaskId = null; // ID of pending async PNG conversion task
+
+        function updateMinUploadedImageHeight() {
+            if (uploadedImages.length === 0) {
+                minUploadedImageHeight = 0;
+            } else {
+                minUploadedImageHeight = Math.min(...uploadedImages.map(img => img.height));
+            }
+        }
 
         async function displayResult() {
             try {
@@ -1879,8 +1892,7 @@
                 // Calculate the threshold percentage
                 // a = 100 / Math.ceil(stitchedHeight / (minInputHeight - 25% of minInputHeight))
                 // a = 100 / Math.ceil(stitchedHeight / (minInputHeight * 0.75))
-                const minInputHeight = Math.min(...uploadedImages.map(img => img.height));
-                const effectiveMinHeight = minInputHeight * 0.75;
+                const effectiveMinHeight = minUploadedImageHeight * 0.75;
                 const maxColumns = Math.ceil(originalStitchedHeight / effectiveMinHeight);
                 columnSliderThreshold = 100 / maxColumns;
 
@@ -1931,6 +1943,7 @@
             let isDragging = false;
             let sliderValue = 0; // 0 to 100
 
+            // Updates visual slider position and returns the calculated column count
             function updateSliderPosition(percent) {
                 percent = Math.max(0, Math.min(100, percent));
                 sliderValue = percent;
@@ -1940,16 +1953,18 @@
                 fill.style.width = percent + '%';
 
                 // Calculate number of columns based on percentage
-                // 0% to <threshold = 1 column, threshold to <2*threshold = 2 columns, etc.
-                const minInputHeight = Math.min(...uploadedImages.map(img => img.height));
-                const effectiveMinHeight = minInputHeight * 0.75;
+                const effectiveMinHeight = minUploadedImageHeight * 0.75;
                 const maxColumns = Math.ceil(originalStitchedHeight / effectiveMinHeight);
 
                 let newColumnCount = Math.floor(percent / columnSliderThreshold) + 1;
                 newColumnCount = Math.min(newColumnCount, maxColumns);
                 newColumnCount = Math.max(1, newColumnCount);
 
-                // Only re-render if column count changed
+                return newColumnCount;
+            }
+
+            function handleSliderChange(percent) {
+                const newColumnCount = updateSliderPosition(percent);
                 if (newColumnCount !== currentColumnCount) {
                     currentColumnCount = newColumnCount;
                     renderColumnsImage(currentColumnCount);
@@ -1973,7 +1988,7 @@
             thumb.addEventListener('pointermove', (e) => {
                 if (!isDragging) return;
                 const percent = getPercentFromEvent(e);
-                updateSliderPosition(percent);
+                handleSliderChange(percent);
             });
 
             thumb.addEventListener('pointerup', (e) => {
@@ -1989,22 +2004,43 @@
             track.addEventListener('pointerdown', (e) => {
                 if (e.target === thumb) return;
                 const percent = getPercentFromEvent(e);
-                updateSliderPosition(percent);
+                handleSliderChange(percent);
             });
 
             // Initialize at 0%
-            updateSliderPosition(0);
+            handleSliderChange(0);
         }
 
         function renderColumnsImage(columnCount) {
             if (!originalStitchedImage || columnCount < 1) return;
 
-            const resultImage = document.getElementById('resultImage');
-            if (!resultImage) return;
+            const resultContainer = document.getElementById('resultContainer');
+            let resultImage = document.getElementById('resultImage');
+            if (!resultContainer) return;
+
+            // Cancel any pending PNG conversion task
+            if (pendingPngTaskId !== null) {
+                pendingPngTaskId = null;
+            }
 
             if (columnCount === 1) {
                 // Just show the original image
-                resultImage.src = originalStitchedImage.src;
+                if (resultImage && resultImage.tagName === 'IMG') {
+                    resultImage.src = originalStitchedImage.src;
+                } else {
+                    // Replace canvas with img
+                    const img = document.createElement('img');
+                    img.id = 'resultImage';
+                    img.className = 'result-image';
+                    img.alt = 'Stitched Screenshot';
+                    img.src = originalStitchedImage.src;
+                    if (columnsCanvas) {
+                        columnsCanvas.replaceWith(img);
+                        columnsCanvas = null;
+                    } else if (resultImage) {
+                        resultImage.replaceWith(img);
+                    }
+                }
                 return;
             }
 
@@ -2013,11 +2049,15 @@
             const newWidth = originalStitchedWidth * columnCount;
             const newHeight = columnHeight;
 
-            // Create canvas for the new columnar layout
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = newWidth;
-            canvas.height = newHeight;
+            // Reuse or create canvas
+            if (!columnsCanvas) {
+                columnsCanvas = document.createElement('canvas');
+                columnsCanvas.id = 'resultImage';
+                columnsCanvas.className = 'result-image';
+            }
+            const ctx = columnsCanvas.getContext('2d');
+            columnsCanvas.width = newWidth;
+            columnsCanvas.height = newHeight;
 
             // Draw each column
             for (let i = 0; i < columnCount; i++) {
@@ -2036,8 +2076,36 @@
                 }
             }
 
-            // Update the result image
-            resultImage.src = canvas.toDataURL('image/png');
+            // Immediately display the canvas
+            if (resultImage && resultImage !== columnsCanvas) {
+                resultImage.replaceWith(columnsCanvas);
+            }
+
+            // Start async PNG conversion in background
+            const taskId = Date.now();
+            pendingPngTaskId = taskId;
+
+            columnsCanvas.toBlob((blob) => {
+                // Check if this task is still valid (not cancelled by newer task)
+                if (pendingPngTaskId !== taskId) return;
+                pendingPngTaskId = null;
+
+                const url = URL.createObjectURL(blob);
+                const img = document.createElement('img');
+                img.id = 'resultImage';
+                img.className = 'result-image';
+                img.alt = 'Stitched Screenshot';
+                img.onload = () => {
+                    // Replace canvas with the PNG image
+                    const currentElement = document.getElementById('resultImage');
+                    if (currentElement === columnsCanvas) {
+                        columnsCanvas.replaceWith(img);
+                        columnsCanvas = null;
+                    }
+                    URL.revokeObjectURL(url);
+                };
+                img.src = url;
+            }, 'image/png');
         }
 
         function startOver() {
