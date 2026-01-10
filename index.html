@@ -1327,6 +1327,12 @@
                     const yStart = firstLine.bbox.y0;
                     const yEnd = lastLine.bbox.y1;
 
+                    // Collect hashes for debug
+                    const matchHashes = [];
+                    for (let m = 0; m < match.length; m++) {
+                        matchHashes.push(ocrResult.lines[match.startB + m].hash);
+                    }
+
                     // Draw full-width box in MAGENTA for "match with image above"
                     ctx.strokeStyle = '#FF00FF';
                     ctx.lineWidth = 6;
@@ -1335,10 +1341,11 @@
                     ctx.fillStyle = 'rgba(255, 0, 255, 0.15)';
                     ctx.fillRect(0, yStart, img.width, yEnd - yStart);
 
-                    // Label
-                    ctx.font = 'bold 20px monospace';
+                    // Label with hashes
+                    ctx.font = 'bold 16px monospace';
                     ctx.fillStyle = '#FF00FF';
-                    ctx.fillText(`MATCH WITH IMAGE ${i} (above) - ${match.length} lines`, 10, yStart - 10);
+                    ctx.fillText(`MATCH WITH IMAGE ${i} (above) - ${match.length} lines, startB=${match.startB}`, 10, yStart - 30);
+                    ctx.fillText(`Hashes: ${matchHashes.join(', ')}`, 10, yStart - 10);
                 }
 
                 // Draw match region from comparison with NEXT image (this image as "above")
@@ -1350,6 +1357,12 @@
                     const yStart = firstLine.bbox.y0;
                     const yEnd = lastLine.bbox.y1;
 
+                    // Collect hashes for debug
+                    const matchHashes = [];
+                    for (let m = 0; m < match.length; m++) {
+                        matchHashes.push(ocrResult.lines[match.startA + m].hash);
+                    }
+
                     // Draw full-width box in CYAN for "match with image below"
                     ctx.strokeStyle = '#00FFFF';
                     ctx.lineWidth = 6;
@@ -1358,10 +1371,11 @@
                     ctx.fillStyle = 'rgba(0, 255, 255, 0.15)';
                     ctx.fillRect(0, yStart, img.width, yEnd - yStart);
 
-                    // Label
-                    ctx.font = 'bold 20px monospace';
+                    // Label with hashes
+                    ctx.font = 'bold 16px monospace';
                     ctx.fillStyle = '#00FFFF';
-                    ctx.fillText(`MATCH WITH IMAGE ${i + 2} (below) - ${match.length} lines`, 10, yEnd + 25);
+                    ctx.fillText(`MATCH WITH IMAGE ${i + 2} (below) - ${match.length} lines, startA=${match.startA}`, 10, yEnd + 20);
+                    ctx.fillText(`Hashes: ${matchHashes.join(', ')}`, 10, yEnd + 40);
                 }
 
                 // Draw image index label
